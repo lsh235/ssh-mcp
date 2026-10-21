@@ -6,7 +6,7 @@ VS Code의 Copilot이 원격 프로젝트를 읽고 수정하고, 같은 SSH 셸
 
 VS Code Browser에서 현재 대화의 원격 작업을 보고 파일을 직접 옮기려면 [브라우저 세션 보기와 파일 전송](docs/VSCODE_BROWSER.md)을 따릅니다. AI가 create_session_view로 이번 대화의 세션 ID만 묶어 링크를 만들고, 사용자가 인증한 뒤 업로드 파일을 직접 선택하거나 원격 파일을 내려받습니다. 파일 바이트는 MCP 도구 결과나 AI 문맥으로 전달하지 않습니다. [v0.4 화면 설계](docs/V04_STATUS.md)와 [v0.8 전송 검증](docs/V08_STATUS.md)을 참고하세요.
 
-오픈소스의 유용한 기능을 계속 조사하고 이 프로젝트의 배치·보안 경계에 맞춰 이식하기 위한 기준은 [업스트림 기능 조사와 마이그레이션 절차](docs/UPSTREAM_MIGRATION.md)에 기록합니다. v0.7의 bounded metadata listing에 더해 v0.8은 브라우저 A↔원격 MCP B↔SSH 대상 C 사이에 요청 ID·크기 상한·SHA-256·원격 원자적 생성으로 파일을 옮깁니다. v0.8.1은 다음 SSH 연결에서 오래된 고아 작업 디렉터리를 안전 조건에 맞춰 정리합니다. 자세한 내용은 [v0.8 파일 전송](docs/V08_STATUS.md)과 [v0.8.1 고아 전송 정리](docs/V081_STATUS.md)를 참고하세요.
+오픈소스의 유용한 기능을 계속 조사하고 이 프로젝트의 배치·보안 경계에 맞춰 이식하기 위한 기준은 [업스트림 기능 조사와 마이그레이션 절차](docs/UPSTREAM_MIGRATION.md)에 기록합니다. v0.7의 bounded metadata listing, v0.8 브라우저 파일 전송, v0.8.1 고아 작업 디렉터리 정리에 이어 v0.8.2는 살아 있는 SSH 세션에서 검증된 원격 파일 prefix부터 업로드를 재개하고 브라우저 새로고침 뒤 요청 ID를 복구합니다. [v0.8.2 재개 검증](docs/V082_STATUS.md)에서 조사 근거와 제한을 확인하세요.
 
 추가 로그인 화면에 미리 준비한 값을 Enter와 함께 보내려면 [추가 로그인 설정](docs/LOGIN_SETUP.md)과 [설정 예시](examples/config.post-login.example.json)를 사용합니다. 비밀은 MCP 설치 PC의 전용 파일·환경변수에서 읽습니다. [v0.3 검증 결과](docs/V03_STATUS.md)를 참고하세요.
 
@@ -69,6 +69,7 @@ MCP를 설치하는 곳은 B입니다. C에는 기존 SSH 서버와 Bash·Python
 - [v0.7 원격 파일 목록 검증](docs/V07_STATUS.md): bounded metadata listing과 symlink 경계
 - [v0.8 브라우저 파일 전송 검증](docs/V08_STATUS.md): 바이너리 업로드·다운로드, 체크섬, 충돌 거부와 인증 범위
 - [v0.8.1 고아 전송 정리 검증](docs/V081_STATUS.md): 오래된 원격 임시 파일을 활성 세션과 분리해 정리
+- [v0.8.2 확인된 업로드 재개](docs/V082_STATUS.md): browser request ID 복구, 원격 prefix SHA-256과 재개 경계
 - [v0.5 감사 체인 검증](docs/V05_STATUS.md): 감사 로그 전환·검증·제한 사항
 - [대화형 구조도](docs/architecture.html): 연결 구조와 서버별 책임
 - [구조도 검증 기록](docs/DIAGRAM_QA.md): 문서 산출물 검증과 실제 제품 검증의 구분

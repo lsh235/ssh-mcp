@@ -23,24 +23,30 @@ function formatBytes(value){if(value<1024)return value+' B';const units=['KiB','
 function transferMessage(message,isError=false){const node=$('transfer-note');node.textContent=message;node.classList.toggle('bad',isError);}
 function filesUrl(path,requestId){const query=new URLSearchParams({path});if(requestId)query.set('requestId',requestId);return '/viewer-api/views/'+encodeURIComponent(viewId)+'/sessions/'+encodeURIComponent(selectedSession)+'/files?'+query;}
 function downloadName(response,path){const value=response.headers.get('content-disposition')||'';const match=value.match(/filename\*=UTF-8''([^;]+)/i);if(match){try{return decodeURIComponent(match[1]);}catch{}}return path.split('/').filter(Boolean).at(-1)||'download';}
+async function uploadStorageKey(file,path){const identity=JSON.stringify([viewId,selectedSession,path,file.name,file.size,file.lastModified]);const bytes=new TextEncoder().encode(identity);const digest=await crypto.subtle.digest('SHA-256',bytes);return 'shell-mcp-upload:'+Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');}
+function savedUploadRequest(key){try{const value=sessionStorage.getItem(key);return value&&/^[a-f0-9-]{36}$/.test(value)?value:'';}catch{return '';}}
+function rememberUploadRequest(key,id){try{sessionStorage.setItem(key,id);}catch{}}
+function forgetUploadRequest(key){try{sessionStorage.removeItem(key);}catch{}}
 $('remote-path').addEventListener('input',()=>{const file=$('local-file').files?.[0];$('download-file').disabled=!selectedSession||!$('remote-path').value.trim()||transferBusy;$('upload-file').disabled=!selectedSession||!file||!$('remote-path').value.trim()||transferBusy;});
 $('local-file').addEventListener('change',()=>{const file=$('local-file').files?.[0];if(file&&!$('remote-path').value.trim())$('remote-path').value=file.name;uploadIdentity='';uploadRequestId='';$('upload-file').disabled=!selectedSession||!file||!$('remote-path').value.trim()||transferBusy;});
 $('session-list').addEventListener('click',()=>{uploadIdentity='';uploadRequestId='';$('local-file').value='';$('remote-path').value='';$('upload-file').disabled=true;$('download-file').disabled=true;transferMessage('작업 공간 기준 상대 경로를 입력하세요.');});
 $('logout').addEventListener('click',()=>{uploadIdentity='';uploadRequestId='';$('local-file').value='';$('remote-path').value='';transferMessage('다시 연결하면 파일 전송을 사용할 수 있습니다.');});
-$('upload-file').addEventListener('click',()=>{
+$('upload-file').addEventListener('click',async()=>{
   if(transferBusy||!selectedSession||!token)return;
   const file=$('local-file').files?.[0],path=$('remote-path').value.trim();if(!file||!path)return;
   if(file.size>maxTransferBytes){transferMessage('파일이 서버 설정 한도 '+formatBytes(maxTransferBytes)+'를 넘습니다.',true);return;}
-  const identity=[selectedSession,path,file.name,file.size,file.lastModified].join('\0');
-  if(identity!==uploadIdentity){uploadIdentity=identity;uploadRequestId=crypto.randomUUID();}
   transferBusy=true;$('upload-file').disabled=true;$('download-file').disabled=true;
-  const xhr=new XMLHttpRequest();xhr.open('PUT',filesUrl(path,uploadRequestId));xhr.setRequestHeader('Authorization','Bearer '+token);xhr.setRequestHeader('Content-Type','application/octet-stream');xhr.timeout=1800000;
+  try{
+  const identity=await uploadStorageKey(file,path);
+  if(identity!==uploadIdentity){uploadIdentity=identity;uploadRequestId=savedUploadRequest(identity)||crypto.randomUUID();rememberUploadRequest(identity,uploadRequestId);}
+  const requestId=uploadRequestId,xhr=new XMLHttpRequest();xhr.open('PUT',filesUrl(path,requestId));xhr.setRequestHeader('Authorization','Bearer '+token);xhr.setRequestHeader('Content-Type','application/octet-stream');xhr.timeout=1800000;
   xhr.upload.onprogress=event=>{if(event.lengthComputable)transferMessage('업로드 중 · '+formatBytes(event.loaded)+' / '+formatBytes(event.total));};
-  xhr.onload=()=>{let body={};try{body=JSON.parse(xhr.responseText);}catch{}if(xhr.status>=200&&xhr.status<300&&body.result?.state==='completed'){transferMessage('업로드 완료 · '+formatBytes(body.result.bytes)+' · SHA-256 '+body.result.sha256);uploadIdentity='';uploadRequestId='';$('local-file').value='';}else{const code=body.error?.code||'TRANSFER_FAILED';const message=code==='FILE_EXISTS'?'원격 경로에 파일이 이미 있습니다. 기존 파일은 덮어쓰지 않았습니다.':code==='TRANSFER_UNKNOWN'||code==='TRANSFER_IN_PROGRESS'?'결과를 확정할 수 없습니다. 같은 파일과 요청으로 확인하거나 원격 파일을 직접 확인하세요.':code==='FILE_TOO_LARGE'?'파일이 서버 설정 한도를 넘습니다.':code==='INVALID_PATH'?'경로가 작업 공간을 벗어나거나 유효하지 않습니다.':'업로드 실패 · '+code;transferMessage(message,true);}};
-  xhr.onerror=()=>transferMessage('연결이 끊겼습니다. 결과가 불확실할 수 있어 같은 파일·경로로 다시 확인하세요.',true);
-  xhr.ontimeout=()=>transferMessage('업로드 응답 시간이 초과됐습니다. 같은 파일·경로로 다시 확인하기 전 원격 결과를 살펴보세요.',true);
+  xhr.onload=()=>{let body={};try{body=JSON.parse(xhr.responseText);}catch{}if(xhr.status>=200&&xhr.status<300&&body.result?.state==='completed'){forgetUploadRequest(identity);transferMessage('업로드 완료 · '+formatBytes(body.result.bytes)+' · SHA-256 '+body.result.sha256);uploadIdentity='';uploadRequestId='';$('local-file').value='';}else{const code=body.error?.code||'TRANSFER_FAILED';if(!['TRANSFER_UNKNOWN','TRANSFER_IN_PROGRESS','SESSION_BUSY','SESSION_UNAVAILABLE'].includes(code))forgetUploadRequest(identity);const message=code==='FILE_EXISTS'?'원격 경로에 파일이 이미 있습니다. 기존 파일은 덮어쓰지 않았습니다.':code==='TRANSFER_UNKNOWN'||code==='TRANSFER_IN_PROGRESS'?'SSH 세션이 유지 중이면 같은 파일·경로를 다시 선택해 이어갈 수 있습니다. 새로고침 후에는 토큰을 다시 입력하고 파일을 재선택하세요.':code==='FILE_TOO_LARGE'?'파일이 서버 설정 한도를 넘습니다.':code==='INVALID_PATH'?'경로가 작업 공간을 벗어나거나 유효하지 않습니다.':'업로드 실패 · '+code;transferMessage(message,true);}};
+  xhr.onerror=()=>transferMessage('연결이 끊겼습니다. 같은 파일·경로를 다시 선택하면 확인된 원격 부분부터 이어갑니다(SSH 세션이 유지된 경우).',true);
+  xhr.ontimeout=()=>transferMessage('응답 시간이 초과됐습니다. SSH 세션이 유지 중이면 같은 파일·경로로 다시 업로드해 이어갈 수 있습니다.',true);
   xhr.onloadend=()=>{transferBusy=false;$('upload-file').disabled=!selectedSession||!$('local-file').files?.[0]||!$('remote-path').value.trim();$('download-file').disabled=!selectedSession||!$('remote-path').value.trim();};
   transferMessage('업로드 준비 중…');xhr.send(file);
+  }catch{transferBusy=false;$('upload-file').disabled=!selectedSession||!$('local-file').files?.[0]||!$('remote-path').value.trim();transferMessage('업로드 요청을 준비하지 못했습니다.',true);}
 });
 $('download-file').addEventListener('click',async()=>{
   if(transferBusy||!selectedSession||!token)return;const path=$('remote-path').value.trim();if(!path)return;

@@ -1,5 +1,13 @@
 # 오픈소스 조사 근거
 
+## 2026-10-22 v0.8.2: 파일 전송 재개 조사
+
+[tus 프로토콜 1.0](https://tus.io/protocols/resumable-upload)은 HEAD로 서버가 확정한 `Upload-Offset`을 확인한 뒤 같은 위치에서 PATCH를 이어가며, 서버 현재 offset과 요청 offset이 다르면 409로 upload resource를 변경하지 않도록 정의합니다. Shell MCP는 현재 단일 PUT 브라우저 API를 유지하므로 tus endpoint는 구현하지 않았고, 원격 helper에서 확정 offset을 되돌려 주는 아이디어만 적응했습니다.
+
+고정 리비전 [`xunuo2345/ssh-mcp-toolkit`](https://github.com/xunuo2345/ssh-mcp-toolkit/tree/eb495ba453e1b899b8a7d98caac7558e6609a968)의 [전송 구현](https://github.com/xunuo2345/ssh-mcp-toolkit/blob/eb495ba453e1b899b8a7d98caac7558e6609a968/src/index.ts)은 `.part` 크기에서 재개 위치를 고르고 완료 시 SHA-256을 비교합니다. [resume tests](https://github.com/xunuo2345/ssh-mcp-toolkit/blob/eb495ba453e1b899b8a7d98caac7558e6609a968/test/resume.test.ts)는 크기가 같은 손상 partial에 대해 checksum 실패를 보이지만 조기 prefix 검증과 자동 초기화는 하지 않습니다. Shell MCP는 원격 confirmed checkpoint와 그 prefix의 SHA-256을 비교해 정확한 바이트가 확인될 때만 이어가고, 다른 경우에는 unpublished partial을 0으로 reset합니다. 업스트림 소스 코드는 복사하지 않았습니다.
+
+브라우저는 HTTPS origin의 sessionStorage에 요청 ID만 유지하고 토큰은 저장하지 않습니다. 새로고침 후 파일 재선택은 같은 MCP 서버·같은 살아 있는 SSH 세션의 transfer ID에 연결됩니다. 서버나 SSH 프로세스가 재시작되면 복구할 remote spool이 없으므로 `SERVER_RESTART`를 재시도하지 않습니다. 현재 B→C 전송만 resume하며 브라우저→B 단일 body의 네트워크 재개와 실제 VS Code browser acceptance는 범위 밖입니다.
+
 ## 2026-10-22 v0.8.1: 고아 전송 조각 정리 재조사
 
 고정 리비전 [`tufantunc/ssh-mcp` SFTP adapter](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/ssh/sftp.ts)는 stream 업로드를 sibling `.part`에 쓰고 게시 후 정리하며, 실패한 `.part`도 best-effort로 제거합니다. 같은 리비전의 [전송 도구](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/tools/transfer-tools.ts)는 다운로드 staging을 `finally`에서 정리합니다. 재접속 후 부분 파일 이어쓰기는 구현하지 않았습니다. OpenBSD [`sftp(1)`의 `-a`](https://man.openbsd.org/sftp.1)는 끊긴 전송을 이어갈 수 있지만 부분 내용이 다르면 결과가 손상될 수 있다고 경고합니다.

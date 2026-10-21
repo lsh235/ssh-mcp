@@ -366,7 +366,43 @@ def main(a):
             if (record.get('destination') != str(destination) or record.get('bytesExpected') != a['bytes']
                 or record.get('sha256Expected') != a['sha256']):
                 fail('TRANSFER_CONFLICT', 'Transfer ID was already used with different file metadata')
-            return {'transferId':transfer, 'state':record['state'], 'bytes':record['received']}
+            if record.get('state') != 'uploading':
+                return {'transferId':transfer, 'state':record['state'], 'bytes':record.get('received', record['bytesExpected']),
+                        'nextSequence':record.get('nextSequence', 0)}
+            temporary = destination.parent / ('.shell-mcp-' + transfer + '.part')
+            if record.get('temporary') != str(temporary):
+                fail('INVALID_TRANSFER', 'Upload staging path does not match its transfer ID')
+            try:
+                fd = os.open(temporary, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
+            except FileNotFoundError:
+                fd = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, 'r+b') as f:
+                if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                    fail('INVALID_FILE', 'Upload staging file is invalid')
+                actual = os.fstat(f.fileno()).st_size
+                confirmed = record.get('received')
+                if isinstance(confirmed, bool) or not isinstance(confirmed, int) or confirmed < 0 or confirmed > record['bytesExpected']:
+                    fail('INVALID_TRANSFER', 'Upload checkpoint is invalid')
+                if actual < confirmed:
+                    confirmed = 0
+                if actual != confirmed:
+                    f.truncate(confirmed); f.flush(); os.fsync(f.fileno())
+                f.seek(0)
+                prefix = hashlib.sha256()
+                remaining = confirmed
+                while remaining:
+                    block = f.read(min(1048576, remaining))
+                    if not block:
+                        fail('INVALID_FILE', 'Upload staging file changed while checking its checkpoint')
+                    prefix.update(block); remaining -= len(block)
+            next_sequence = (confirmed + 1048575) // 1048576
+            if confirmed != record.get('received'):
+                record.update({'received':confirmed, 'nextSequence':next_sequence,
+                               'lastSequence':next_sequence - 1 if next_sequence else None,
+                               'lastChunkHash':None, 'lastChunkBytes':None})
+                save_transfer(directory, record)
+            return {'transferId':transfer, 'state':'uploading', 'bytes':confirmed,
+                    'nextSequence':next_sequence, 'prefixSha256':prefix.hexdigest()}
         if os.path.lexists(destination): fail('FILE_EXISTS', 'Refusing to overwrite an existing workspace file')
         temporary = destination.parent / ('.shell-mcp-' + transfer + '.part')
         record = {'id':transfer, 'state':'uploading', 'destination':str(destination),
@@ -380,7 +416,30 @@ def main(a):
             try: os.unlink(temporary)
             except FileNotFoundError: pass
             raise
-        return {'transferId':transfer, 'state':'uploading', 'bytes':0}
+        return {'transferId':transfer, 'state':'uploading', 'bytes':0, 'nextSequence':0,
+                'prefixSha256':hashlib.sha256(b'').hexdigest()}
+    if op == 'upload_reset':
+        transfer = transfer_id(a.get('transferId'), 'u')
+        record = load_transfer(directory, transfer)
+        if record.get('state') != 'uploading':
+            fail('TRANSFER_UNKNOWN', 'Only an unpublished upload can be reset')
+        destination = pathlib.Path(record['destination'])
+        temporary = destination.parent / ('.shell-mcp-' + transfer + '.part')
+        if record.get('temporary') != str(temporary):
+            fail('INVALID_TRANSFER', 'Upload staging path does not match its transfer ID')
+        try:
+            fd = os.open(temporary, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except FileNotFoundError:
+            fd = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'r+b') as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                fail('INVALID_FILE', 'Upload staging file is invalid')
+            f.truncate(0); f.flush(); os.fsync(f.fileno())
+        record.update({'received':0, 'nextSequence':0, 'lastSequence':None,
+                       'lastChunkHash':None, 'lastChunkBytes':None})
+        save_transfer(directory, record)
+        return {'transferId':transfer, 'state':'uploading', 'bytes':0, 'nextSequence':0,
+                'prefixSha256':hashlib.sha256(b'').hexdigest()}
     if op == 'upload_chunk':
         transfer = transfer_id(a.get('transferId'), 'u')
         record = load_transfer(directory, transfer)

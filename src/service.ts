@@ -22,6 +22,12 @@ async function digestFile(path:string){
   for await(const chunk of createReadStream(path,{highWaterMark:1048576})){bytes+=chunk.length;digest.update(chunk);}
   return {bytes,sha256:digest.digest('hex')};
 }
+async function digestFilePrefix(path:string,length:number){
+  const digest=createHash('sha256');let bytes=0;
+  if(length>0)for await(const chunk of createReadStream(path,{highWaterMark:1048576,start:0,end:length-1})){bytes+=chunk.length;digest.update(chunk);}
+  assert(bytes===length,'TRANSFER_SOURCE_CHANGED','Could not verify the staged upload prefix');
+  return digest.digest('hex');
+}
 export class ShellService {
   readonly store: Store;
   private readonly auditLog: AuditLog;
@@ -369,23 +375,58 @@ export class ShellService {
     const local=await digestFile(localPath);
     assert(local.bytes<=this.config.limits.maxTransferBytes,'FILE_TOO_LARGE','Upload exceeds the configured transfer limit');
     const digest=hash(JSON.stringify([path,local.bytes,local.sha256])),scope=`view-upload:${viewId}:${sessionId}`;
-    const prior=this.store.request(owner,scope,requestId,digest);if(prior)return this.uploadReceipt(owner,prior);
+    const prior=this.store.request(owner,scope,requestId,digest);
+    if(prior){
+      const previous=this.store.get('transfer',prior,owner);
+      if(previous.state==='completed')return this.uploadReceipt(owner,prior);
+      if(previous.state==='started')throw new Fault('TRANSFER_IN_PROGRESS','An upload with this request ID is still being resolved');
+      if(previous.state!=='unknown'||previous.reason==='SERVER_RESTART')return this.uploadReceipt(owner,prior);
+    }
     this.assertAuditHealthy();
     return this.locked(owner,sessionId,true,async(ssh,s)=>{
-      const repeated=this.store.request(owner,scope,requestId,digest);if(repeated)return this.uploadReceipt(owner,repeated);
-      const id=uid('u');let row:RecordValue={id,owner,state:'started',updatedAt:Date.now(),sessionId,viewId,
-        direction:'upload',bytes:local.bytes,sha256:local.sha256};
-      this.audit('file_upload_requested',owner,id,'accepted');
-      this.store.put('transfer',row);this.store.remember(owner,scope,requestId,digest,id);
+      const repeated=this.store.request(owner,scope,requestId,digest);
+      let id:string,row:RecordValue;
+      if(repeated){
+        id=repeated;row=this.store.get('transfer',id,owner);
+        if(row.state==='completed')return this.uploadReceipt(owner,id);
+        if(row.state==='started')throw new Fault('TRANSFER_IN_PROGRESS','An upload with this request ID is still being resolved');
+        assert(row.state==='unknown'&&row.reason!=='SERVER_RESTART','TRANSFER_UNKNOWN','Upload cannot resume because its SSH session is no longer live');
+        row=this.store.put('transfer',{...row,state:'started',reason:'RESUMING'});
+      }else{
+        id=uid('u');row={id,owner,state:'started',updatedAt:Date.now(),sessionId,viewId,
+          direction:'upload',bytes:local.bytes,sha256:local.sha256};
+        this.audit('file_upload_requested',owner,id,'accepted');
+        this.store.put('transfer',row);this.store.remember(owner,scope,requestId,digest,id);
+      }
       let beginAttempted=false,stage='begin';
       const remoteTimeout=this.config.limits.transferTimeoutMs;
       try{
         if(signal?.aborted)throw new Fault('TRANSFER_CANCELLED','Upload was cancelled before remote transfer began');
         beginAttempted=true;
-        await ssh.helper({op:'upload_begin',root:s.root,path,transferId:id,bytes:local.bytes,
+        let begin=await ssh.helper<{state:string;bytes:number;nextSequence?:number;prefixSha256?:string}>({op:'upload_begin',root:s.root,path,transferId:id,bytes:local.bytes,
           maxBytes:this.config.limits.maxTransferBytes,sha256:local.sha256},remoteTimeout);
-        let sequence=0,sent=0;
-        for await(const chunk of createReadStream(localPath,{highWaterMark:1048576})){
+        if(begin.state==='completed'||begin.state==='publishing'){
+          const finished=await ssh.helper<{state:string;bytes:number;sha256:string}>({op:'upload_finish',transferId:id},remoteTimeout);
+          assert(finished.state==='completed'&&finished.bytes===local.bytes&&finished.sha256===local.sha256,
+            'TRANSFER_UNKNOWN','Remote upload did not confirm its final checksum');
+          row=this.store.put('transfer',{...row,state:'completed'});
+          try{this.audit('file_upload',owner,id,'completed');}catch{return {transferId:id,state:'completed',bytes:local.bytes,sha256:local.sha256,auditWarning:'AUDIT_WRITE_FAILED'};}
+          return {transferId:id,state:'completed',bytes:local.bytes,sha256:local.sha256};
+        }
+        assert(begin.state==='uploading','TRANSFER_UNKNOWN','Remote upload is not resumable');
+        let offset=begin.bytes,sequence=begin.nextSequence??0;
+        if(!Number.isSafeInteger(offset)||offset<0||offset>local.bytes||
+           (offset!==local.bytes&&offset%1048576!==0)||!Number.isSafeInteger(sequence)||sequence<0){
+          begin=await ssh.helper<{state:string;bytes:number;nextSequence?:number;prefixSha256?:string}>({op:'upload_reset',transferId:id},remoteTimeout);offset=0;sequence=0;
+        }else{
+          const expectedSequence=Math.ceil(offset/1048576);
+          const prefix=await digestFilePrefix(localPath,offset);
+          if(sequence!==expectedSequence||begin.prefixSha256!==prefix){
+            begin=await ssh.helper<{state:string;bytes:number;nextSequence?:number;prefixSha256?:string}>({op:'upload_reset',transferId:id},remoteTimeout);offset=0;sequence=0;
+          }
+        }
+        let sent=offset;
+        for await(const chunk of createReadStream(localPath,{highWaterMark:1048576,start:offset})){
           if(signal?.aborted)throw new Fault('TRANSFER_CANCELLED','Upload was cancelled before publication');
           const args={op:'upload_chunk',transferId:id,sequence,content:Buffer.from(chunk).toString('base64')};
           stage=`chunk_${sequence}`;
@@ -406,16 +447,21 @@ export class ShellService {
         try{this.audit('file_upload',owner,id,'completed');}catch{return {transferId:id,state:'completed',bytes:local.bytes,sha256:local.sha256,auditWarning:'AUDIT_WRITE_FAILED'};}
         return {transferId:id,state:'completed',bytes:local.bytes,sha256:local.sha256};
       }catch(error){
-        let resolved:'failed'|'completed'|'unknown'=beginAttempted?'unknown':'failed';
+        let resolved:'failed'|'completed'|'unknown'=beginAttempted||(error instanceof Fault&&error.code==='TRANSFER_CANCELLED')?'unknown':'failed';
         if(beginAttempted&&ssh.running){
-          try{
-            const finished=await ssh.helper<{state:string;bytes:number;sha256:string}>({op:'upload_finish',transferId:id},remoteTimeout);
-            if(finished.state==='completed'&&finished.bytes===local.bytes&&finished.sha256===local.sha256)resolved='completed';
-          }catch{
+          const terminalCodes=new Set(['FILE_EXISTS','INVALID_PATH','FILE_TOO_LARGE','TRANSFER_CONFLICT','INVALID_TRANSFER','INVALID_FILE']);
+          const terminal=error instanceof Fault&&terminalCodes.has(error.code);
+          if(!terminal)try{
+              const finished=await ssh.helper<{state:string;bytes:number;sha256:string}>({op:'upload_finish',transferId:id},remoteTimeout);
+              if(finished.state==='completed'&&finished.bytes===local.bytes&&finished.sha256===local.sha256)resolved='completed';
+            }catch{ /* Keep an unpublished remote prefix for an identical retry. */ }
+          if(terminal){
             try{
               const aborted=await ssh.helper<{state:string}>({op:'upload_abort',transferId:id},remoteTimeout);
               resolved=aborted.state==='completed'?'completed':aborted.state==='aborted'?'failed':'unknown';
-            }catch(abortError){if(abortError instanceof Fault&&abortError.code==='TRANSFER_NOT_FOUND')resolved='failed';}
+            }catch(abortError){
+              if(abortError instanceof Fault&&abortError.code==='TRANSFER_NOT_FOUND')resolved='failed';
+            }
           }
         }
         row=this.store.put('transfer',{...row,state:resolved,reason:stage+':'+(error instanceof Fault?error.code:'TRANSFER_FAILED')});

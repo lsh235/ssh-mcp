@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { ShellService } from '../src/service.js';
 import { startServer } from '../src/server.js';
 import { fixture } from './fixture.js';
 import { quote } from '../src/core.js';
@@ -111,6 +112,49 @@ test('browser view: real SSH + MCP creation, bounded history/output, auth and ex
   }finally{await client.close();await runtime.stop();await f.close();delete process.env.SHELL_MCP_TEST_TOKEN;}
 });
 
+test('browser uploads resume confirmed SSH prefixes and reset a corrupt remote prefix',{timeout:45000},async()=>{
+  const f=await fixture(),service=new ShellService(f.config);
+  try{
+    const session=await service.open('owner','test','project','resume-upload-session');
+    service.createSessionView('owner',[session.id],'upload resume','resume-upload-view');
+    type TestSSH={helper:(args:Record<string,unknown>,timeout?:number)=>Promise<unknown>};
+    const ssh=(service as unknown as {runtimes:Map<string,{ssh:TestSSH}>}).runtimes.get(session.id)!.ssh;
+    const original=ssh.helper.bind(ssh),sequences:number[]=[];let loseNextFirstChunk=true;
+    ssh.helper=async(args,timeout)=>{
+      if(args.op==='upload_chunk')sequences.push(Number(args.sequence));
+      const result=await original(args,timeout);
+      if(args.op==='upload_chunk'&&args.sequence===0&&loseNextFirstChunk){loseNextFirstChunk=false;throw new Error('fixture: lost chunk acknowledgement after remote fsync');}
+      return result;
+    };
+    const payload=Buffer.alloc(2*1024*1024+37);for(let i=0;i<payload.length;i++)payload[i]=(i*31+17)%256;
+    const source=join(f.dir,'resume.bin');writeFileSync(source,payload);
+    await assert.rejects(service.uploadViewFile('owner',service.store.list('view','owner')[0].id,session.id,'resume.bin',source,'resume-ok'),{code:'TRANSFER_UNKNOWN'});
+    const row=service.store.list('transfer','owner').find(item=>item.state==='unknown')!;
+    const unconfirmed=join(f.root,`.shell-mcp-${row.id}.part`);writeFileSync(unconfirmed,Buffer.concat([readFileSync(unconfirmed),Buffer.from('unconfirmed tail')]));
+    assert.deepEqual(sequences,[0]);
+    const resumed=await service.uploadViewFile('owner',service.store.list('view','owner')[0].id,session.id,'resume.bin',source,'resume-ok');
+    assert.equal(resumed.state,'completed');assert.deepEqual(sequences,[0,1,2]);
+    assert.deepEqual(readFileSync(join(f.root,'resume.bin')),payload);
+
+    const corruptSource=join(f.dir,'resume-corrupt.bin');writeFileSync(corruptSource,payload);sequences.length=0;loseNextFirstChunk=true;
+    await assert.rejects(service.uploadViewFile('owner',service.store.list('view','owner')[0].id,session.id,'resume-corrupt.bin',corruptSource,'resume-corrupt'),{code:'TRANSFER_UNKNOWN'});
+    const corruptRow=service.store.list('transfer','owner').find(item=>item.state==='unknown')!;
+    const partial=join(f.root,`.shell-mcp-${corruptRow.id}.part`),corrupt=readFileSync(partial);corrupt[0]^=0xff;writeFileSync(partial,corrupt);
+    assert.deepEqual(sequences,[0]);
+    const recovered=await service.uploadViewFile('owner',service.store.list('view','owner')[0].id,session.id,'resume-corrupt.bin',corruptSource,'resume-corrupt');
+    assert.equal(recovered.state,'completed');assert.deepEqual(sequences,[0,0,1,2]);
+    assert.deepEqual(readFileSync(join(f.root,'resume-corrupt.bin')),payload);
+
+    const restartSource=join(f.dir,'resume-restart.bin');writeFileSync(restartSource,payload);sequences.length=0;loseNextFirstChunk=true;
+    await assert.rejects(service.uploadViewFile('owner',service.store.list('view','owner')[0].id,session.id,'resume-restart.bin',restartSource,'resume-restart'),{code:'TRANSFER_UNKNOWN'});
+    const restartRow=service.store.list('transfer','owner').find(item=>item.state==='unknown')!;
+    service.store.put('transfer',{...restartRow,reason:'SERVER_RESTART'});
+    await assert.rejects(service.uploadViewFile('owner',service.store.list('view','owner')[0].id,session.id,'resume-restart.bin',restartSource,'resume-restart'),{code:'TRANSFER_UNKNOWN'});
+    assert.deepEqual(sequences,[0],'a transfer marked as recovered from server restart is never replayed');
+    await service.closeSession('owner',session.id);
+  }finally{await service.shutdown();await f.close();}
+});
+
 test('saved browser views are idempotent, owner scoped, bounded and survive restart',{timeout:15000},async()=>{
   const f=await fixture();process.env.SHELL_MCP_TEST_TOKEN=token;let runtime=await startServer(f.config);
   try{
@@ -139,7 +183,8 @@ test('viewer static assets have strict policies and never embed credentials',{ti
     }
     const html=await (await fetch(base+'/sessions')).text(),js=await (await fetch(base+'/session-assets/app.js')).text();
     assert(html.includes('type="file"'));assert(html.includes('원격 파일 전송'));assert(js.includes('XMLHttpRequest'));
-    assert(!js.includes('localStorage'));assert(!js.includes('sessionStorage'));
+    assert(!js.includes('localStorage'));assert(js.includes('sessionStorage.getItem'));assert(js.includes('sessionStorage.setItem'));
+    assert(!js.includes("sessionStorage.setItem('token'"));assert(!js.includes('sessionStorage.setItem("token"'));
     assert.equal((await fetch(base+'/session-assets/no-such-file')).status,404);
   }finally{await runtime.stop();await f.close();delete process.env.SHELL_MCP_TEST_TOKEN;}
 });
