@@ -1,0 +1,17 @@
+[Unit]
+Description=Shell MCP persistent SSH development server
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/2026/shell-mcp
+ExecStart=/usr/bin/node %h/2026/shell-mcp/dist/cli.js --config %h/.config/shell-mcp/config.json
+EnvironmentFile=-%h/.config/shell-mcp/service.env
+UMask=0077
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=60
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

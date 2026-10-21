@@ -1,0 +1,38 @@
+{
+  "version": "0.2.0",
+  "status": "PASS",
+  "tools": 19,
+  "newTools": [
+    "send_input",
+    "wait_command",
+    "search_files",
+    "list_commands",
+    "reopen_session"
+  ],
+  "actor": "current Codex conversation via MCP SDK bridge",
+  "nativeCodexRegistration": "NOT RUN",
+  "additionalAiApiCalls": 0,
+  "protocol": "2026-07-28",
+  "containerId": "d6163ace6412a61203f37448462bd584567d95f45fa9f72635bc07a11a21d3f4",
+  "containerPreserved": true,
+  "input": {
+    "commandId": "c_47908212-24ff-488b-a824-fd74513d5dd8",
+    "utf8": true,
+    "eof": true,
+    "duplicatePublishedOnce": true,
+    "exitCode": 0
+  },
+  "searchPagination": true,
+  "commandHistoryPagination": true,
+  "sessionStatePreserved": true,
+  "freshSession": {
+    "generation": 2,
+    "oldEnvironmentRestored": false,
+    "idempotent": true
+  },
+  "existingProjectTests": {
+    "total": 5,
+    "failures": 0
+  },
+  "mcpCalls": 21
+}

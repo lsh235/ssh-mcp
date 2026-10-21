@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Shell MCP · 원격 개발 세션 설계",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1260,
+      790
+    ]
+  },
+  "components": [
+    {
+      "id": "copilot-client",
+      "type": "frontend",
+      "label": "VS Code · Copilot",
+      "sublabel": "사용자 PC",
+      "pos": [
+        40,
+        290
+      ],
+      "size": [
+        200,
+        90
+      ]
+    },
+    {
+      "id": "session-owner",
+      "type": "backend",
+      "label": "MCP · 세션 관리자",
+      "sublabel": "TLS · 인증 · 작업 추적",
+      "pos": [
+        360,
+        290
+      ],
+      "size": [
+        200,
+        90
+      ]
+    },
+    {
+      "id": "ssh-adapter",
+      "type": "backend",
+      "label": "OpenSSH 실행기",
+      "sublabel": "연결 · 영구 셸 소유",
+      "pos": [
+        680,
+        290
+      ],
+      "size": [
+        200,
+        90
+      ]
+    },
+    {
+      "id": "target-shell",
+      "type": "backend",
+      "label": "작업 대상 PC",
+      "sublabel": "sshd · Bash 세션",
+      "pos": [
+        1000,
+        290
+      ],
+      "size": [
+        220,
+        90
+      ]
+    },
+    {
+      "id": "result-store",
+      "type": "database",
+      "label": "명령 결과 저장소",
+      "sublabel": "상태 · 로그 · 페이지 조회",
+      "pos": [
+        360,
+        570
+      ],
+      "size": [
+        200,
+        90
+      ]
+    },
+    {
+      "id": "host-credentials",
+      "type": "security",
+      "label": "MCP PC의 SSH 설정",
+      "sublabel": "config · 키 · agent",
+      "pos": [
+        680,
+        570
+      ],
+      "size": [
+        200,
+        90
+      ]
+    },
+    {
+      "id": "remote-workspace",
+      "type": "database",
+      "label": "원격 프로젝트 파일",
+      "sublabel": "읽기 · 패치 · 버전 확인",
+      "pos": [
+        1000,
+        570
+      ],
+      "size": [
+        220,
+        90
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "원격 MCP 설치 PC · 인증정보와 세션 보관",
+      "wraps": [
+        "session-owner",
+        "ssh-adapter",
+        "result-store",
+        "host-credentials"
+      ],
+      "pad": 30
+    },
+    {
+      "kind": "security-group",
+      "label": "작업 대상 PC · 기존 SSH 포트 사용",
+      "wraps": [
+        "target-shell",
+        "remote-workspace"
+      ],
+      "pad": 20
+    }
+  ],
+  "connections": [
+    {
+      "id": "client-mcp",
+      "from": "copilot-client",
+      "to": "session-owner",
+      "label": "HTTPS :443",
+      "variant": "emphasis"
+    },
+    {
+      "id": "shell-dispatch",
+      "from": "session-owner",
+      "to": "ssh-adapter",
+      "label": "명령 직렬 실행"
+    },
+    {
+      "id": "ssh-connect",
+      "from": "ssh-adapter",
+      "to": "target-shell",
+      "label": "SSH / TCP 22",
+      "variant": "emphasis"
+    },
+    {
+      "id": "persist-result",
+      "from": "session-owner",
+      "to": "result-store",
+      "label": "상태 · 결과 기록",
+      "labelDy": 80
+    },
+    {
+      "id": "resolve-auth",
+      "from": "ssh-adapter",
+      "to": "host-credentials",
+      "label": "서버 내부 참조",
+      "variant": "security",
+      "labelDy": 80
+    },
+    {
+      "id": "shell-files",
+      "from": "target-shell",
+      "to": "remote-workspace",
+      "label": "파일 읽기 · 수정",
+      "labelDy": 80
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "개발 루프",
+      "items": [
+        "원격 코드 읽기 → 패치 적용 → 테스트 → 결과 해석",
+        "같은 셸에서 작업 디렉터리와 환경변수 유지"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "세션 경계",
+      "items": [
+        "MCP 통신이 끊겨도 SSH 작업은 서버에서 추적",
+        "SSH가 끊기면 상태 손실을 알리고 명령 자동 재실행 금지"
+      ]
+    }
+  ]
+}

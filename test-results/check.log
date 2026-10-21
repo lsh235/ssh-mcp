@@ -1,0 +1,84 @@
+
+> shell-mcp@0.1.0 check
+> npm run build && npm test && npm run test:ssh
+
+
+> shell-mcp@0.1.0 build
+> tsc && node scripts/copy-assets.mjs
+
+
+> shell-mcp@0.1.0 test
+> tsx --test --test-concurrency=1 test/*.test.ts
+
+TAP version 13
+# Subtest: OAuth validates audience, expiry, subject and scopes against signed tokens
+ok 1 - OAuth validates audience, expiry, subject and scopes against signed tokens
+  ---
+  duration_ms: 13.01379
+  type: 'test'
+  ...
+# Subtest: durable admission conflicts and restart recovery never replay uncertain jobs
+ok 2 - durable admission conflicts and restart recovery never replay uncertain jobs
+  ---
+  duration_ms: 18.603341
+  type: 'test'
+  ...
+# Subtest: config rejects non-loopback listeners and unsafe target aliases
+ok 3 - config rejects non-loopback listeners and unsafe target aliases
+  ---
+  duration_ms: 1.338136
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 175.312846
+
+> shell-mcp@0.1.0 test:ssh
+> tsx --test --test-concurrency=1 test/ssh.integration.ts
+
+TAP version 13
+# Subtest: real OpenSSH: persistent shell, patch/test loop, output, deduplication, failures and isolation
+ok 1 - real OpenSSH: persistent shell, patch/test loop, output, deduplication, failures and isolation
+  ---
+  duration_ms: 3832.028868
+  type: 'test'
+  ...
+# Subtest: multi-file patch reports a real partial filesystem failure
+ok 2 - multi-file patch reports a real partial filesystem failure
+  ---
+  duration_ms: 756.895265
+  type: 'test'
+  ...
+# Subtest: real HTTP MCP client: authentication, remote commands and reconnect without replay
+ok 3 - real HTTP MCP client: authentication, remote commands and reconnect without replay
+  ---
+  duration_ms: 3005.022076
+  type: 'test'
+  ...
+# Subtest: SSH transport loss is uncertain and host key checking cannot be bypassed
+ok 4 - SSH transport loss is uncertain and host key checking cannot be bypassed
+  ---
+  duration_ms: 2116.462873
+  type: 'test'
+  ...
+# Subtest: remote deadline and bounded output are explicit
+ok 5 - remote deadline and bounded output are explicit
+  ---
+  duration_ms: 1426.09059
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 11451.488896

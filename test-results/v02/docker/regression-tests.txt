@@ -1,0 +1,10 @@
+test_discount_reduces_taxable_amount (test_pricing.InvoiceTests.test_discount_reduces_taxable_amount) ... ok
+test_empty_invoice (test_pricing.InvoiceTests.test_empty_invoice) ... ok
+test_multiple_lines (test_pricing.InvoiceTests.test_multiple_lines) ... ok
+test_no_discount (test_pricing.InvoiceTests.test_no_discount) ... ok
+test_no_tax (test_pricing.InvoiceTests.test_no_tax) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.000s
+
+OK

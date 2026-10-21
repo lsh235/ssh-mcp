@@ -1,0 +1,24 @@
+{
+  "host": "127.0.0.1",
+  "port": 8787,
+  "publicUrl": "https://mcp.example.com/mcp",
+  "allowedHosts": ["mcp.example.com", "127.0.0.1", "localhost"],
+  "allowedOrigins": [],
+  "stateDir": "/home/developer/.local/state/shell-mcp",
+  "auth": {
+    "mode": "oauth",
+    "issuer": "https://identity.example.com",
+    "audience": "https://mcp.example.com/mcp",
+    "jwksUrl": "https://identity.example.com/.well-known/jwks.json",
+    "subjects": ["replace-with-your-identity-subject"],
+    "requiredScopes": ["shell:use"]
+  },
+  "targets": {
+    "dev-linux": {
+      "description": "Development PC",
+      "sshAlias": "dev-linux",
+      "principals": ["replace-with-your-identity-subject"],
+      "workspaces": { "sample": "/srv/projects/sample" }
+    }
+  }
+}

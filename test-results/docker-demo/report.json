@@ -1,0 +1,32 @@
+{
+  "status": "PASS",
+  "actor": "current Codex conversation",
+  "additionalAiApiCalls": 0,
+  "nativeCodexMcpToolRegistration": "NOT RUN; SDK bridge used from current session",
+  "protocols": [
+    "2026-07-28"
+  ],
+  "container": {
+    "name": "shell-mcp-demo-target",
+    "id": "d6163ace6412a61203f37448462bd584567d95f45fa9f72635bc07a11a21d3f4",
+    "image": "sha256:6a260b71d0ddbf50672883aaa09b5533c562d2378b0384f6e45cc4e3ecae5d9a",
+    "running": true
+  },
+  "sessionId": "s_32bfec27-fb2b-4923-92f5-5020209dc553",
+  "before": {
+    "commandId": "c_19799145-e107-419b-a975-1e7c4b009daf",
+    "exitCode": 1,
+    "tests": 5,
+    "failures": 2
+  },
+  "after": {
+    "commandId": "c_0ba7a889-2b82-4a1b-9f71-929a7347212d",
+    "exitCode": 0,
+    "tests": 5,
+    "failures": 0
+  },
+  "testSourceUnchanged": true,
+  "sessionEnvironmentPreserved": true,
+  "repeatedRequestExecutedOnce": true,
+  "mcpCallCount": 23
+}

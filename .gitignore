@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.state/
+*.sqlite*
+config.local.json
+.env
+coverage/
+test-results/private/

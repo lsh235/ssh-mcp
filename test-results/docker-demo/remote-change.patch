@@ -1,0 +1,13 @@
+diff --git a/pricing.py b/pricing.py
+index 21b6a0a..a827ab8 100644
+--- a/pricing.py
++++ b/pricing.py
+@@ -7,6 +7,6 @@ def invoice_total(lines, discount="0", tax="0"):
+         (Decimal(str(unit_price)) * quantity for unit_price, quantity in lines),
+         Decimal("0"),
+     )
+-    taxable = subtotal
+-    total = taxable * (Decimal("1") + Decimal(tax)) - subtotal * Decimal(discount)
++    taxable = subtotal * (Decimal("1") - Decimal(discount))
++    total = taxable * (Decimal("1") + Decimal(tax))
+     return total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)

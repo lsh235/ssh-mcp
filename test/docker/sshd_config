@@ -1,0 +1,17 @@
+Port 22
+ListenAddress 0.0.0.0
+HostKey /run/demo-keys/host
+AuthorizedKeysFile /run/demo-keys/client.pub
+StrictModes no
+PasswordAuthentication no
+PermitEmptyPasswords no
+KbdInteractiveAuthentication no
+UsePAM no
+PermitRootLogin no
+AllowUsers developer
+AllowTcpForwarding no
+X11Forwarding no
+PrintMotd no
+MaxSessions 10
+Subsystem sftp internal-sftp
+LogLevel ERROR

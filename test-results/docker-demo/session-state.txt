@@ -1,0 +1,3 @@
+marker=subscription-session
+cwd=/workspace/project
+python_prefix=/workspace/project/.venv
