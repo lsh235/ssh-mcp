@@ -2,11 +2,11 @@
 
 VS Code의 Copilot이 원격 프로젝트를 읽고 수정하고, 같은 SSH 셸에서 명령과 테스트를 반복하도록 돕는 원격 MCP 서버입니다.
 
-**현재 상태: v0.5 구현. MCP 도구 20개와 여러 SSH 세션·브라우저 상태 화면을 제공하며, 감사 기록의 해시 연결과 무결성 검증을 추가했습니다. 실제 사용자 PC의 Copilot·VS Code Browser·외부 IdP·공개 HTTPS 배포는 미검증입니다.**
+**현재 상태: v0.6 구현. MCP 도구 20개와 여러 SSH 세션·브라우저 상태 화면을 제공하며, 감사 기록을 체인 연속성을 유지한 크기별 구간으로 나누고 전체 구간을 검증합니다. 실제 사용자 PC의 Copilot·VS Code Browser·외부 IdP·공개 HTTPS 배포는 미검증입니다.**
 
 VS Code Browser에서 현재 대화의 원격 작업을 보려면 [브라우저 세션 보기](docs/VSCODE_BROWSER.md)를 따릅니다. AI가 create_session_view로 이번 대화의 세션 ID만 묶어 링크를 만들고, 사용자가 브라우저에서 인증해 확인합니다. 별도 확장은 필요하지 않습니다. [v0.4 검증 결과](docs/V04_STATUS.md)를 참고하세요.
 
-오픈소스의 유용한 기능을 계속 조사하고 이 프로젝트의 배치·보안 경계에 맞춰 이식하기 위한 기준은 [업스트림 기능 조사와 마이그레이션 절차](docs/UPSTREAM_MIGRATION.md)에 기록합니다. 이번 v0.5에서는 검토한 다른 SSH MCP의 선택형 해시 감사 기능을 독립 검증 가능한 체인으로 발전시켰습니다. [v0.5 검증 결과](docs/V05_STATUS.md)와 `npm run audit:verify -- /절대경로/state/audit.jsonl`을 참고하세요.
+오픈소스의 유용한 기능을 계속 조사하고 이 프로젝트의 배치·보안 경계에 맞춰 이식하기 위한 기준은 [업스트림 기능 조사와 마이그레이션 절차](docs/UPSTREAM_MIGRATION.md)에 기록합니다. v0.5의 해시 감사 체인에 v0.6 구간 회전·장애 복구·전체 이력 검증을 더했습니다. [v0.6 검증 결과](docs/V06_STATUS.md)와 `npm run audit:verify -- /절대경로/state/audit.jsonl`을 참고하세요.
 
 추가 로그인 화면에 미리 준비한 값을 Enter와 함께 보내려면 [추가 로그인 설정](docs/LOGIN_SETUP.md)과 [설정 예시](examples/config.post-login.example.json)를 사용합니다. 비밀은 MCP 설치 PC의 전용 파일·환경변수에서 읽습니다. [v0.3 검증 결과](docs/V03_STATUS.md)를 참고하세요.
 
@@ -65,6 +65,7 @@ MCP를 설치하는 곳은 B입니다. C에는 기존 SSH 서버와 Bash·Python
 - [v0.2 설계](docs/V02_DESIGN.md) · [사용법](docs/V02_USAGE.md) · [검증 결과](docs/V02_STATUS.md)
 - [오픈소스 조사 근거](docs/UPSTREAM_REVIEW.md): 확인한 리비전, 재사용 범위와 교체할 부분
 - [업스트림 기능 조사·마이그레이션 절차](docs/UPSTREAM_MIGRATION.md): 반복 조사 기준, 우선순위와 진행 중 기능 백로그
+- [v0.6 감사 로그 회전 검증](docs/V06_STATUS.md): 구간 연속성·복구·검증 결과와 한계
 - [v0.5 감사 체인 검증](docs/V05_STATUS.md): 감사 로그 전환·검증·제한 사항
 - [대화형 구조도](docs/architecture.html): 연결 구조와 서버별 책임
 - [구조도 검증 기록](docs/DIAGRAM_QA.md): 문서 산출물 검증과 실제 제품 검증의 구분

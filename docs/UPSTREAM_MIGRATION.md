@@ -28,18 +28,20 @@
 
 | 순위 / 상태 | 기능 | 조사 근거와 현재 판단 | 다음 작업 / 완료 증거 |
 | --- | --- | --- | --- |
-| P0 / v0.5 구현 | JSONL 감사 해시 체인과 검증기 | `tufantunc/ssh-mcp`의 감사·선택형 체인·회전 아이디어를 검토. Shell MCP는 기존 로그 체크포인트, 전체 체인 검증, 단일 작성 잠금, 본문 비저장, 검증 CLI를 별도 구현 | 단위 시험, 기동 시 검증, CLI 검증을 확인. 회전은 미지원이며 별도 P1 |
-| P1 / 조사 필요 | 체인 연속성을 보존하는 감사 회전 | 원본은 회전 아이디어를 제공하지만 Shell MCP의 단일 파일 체인은 임의 rename/truncate를 허용하지 않음 | 세그먼트 manifest, 이전 세그먼트 head 연결, 원자적 교체·디스크 부족·복구 시험을 설계. 운영자 삭제와 서버 재기동 경계 검증 후 구현 |
-| P2 / 조사 필요 | 명령 전 승인·읽기 전용 정책 | 원본의 역할별 명령 분류와 승인 흐름을 검토했으나 분류 우회 경고가 있어 그대로 채택하지 않음. [VS Code MCP 문서](https://code.visualstudio.com/api/extension-guides/ai/mcp)는 Elicitation 지원을 설명하지만 실제 사용자 Copilot 시험은 별도 | 실행 전 서버 정책과 클라이언트 승인 능력을 확인. 요청을 구별하는 `ask`는 fail-closed; 문자열 기반 추정만으로 위험 명령을 허용하지 않음. 미지원 클라이언트의 동작과 실제 VS Code 수용 시험 포함 |
+| P0 / v0.5 구현 | JSONL 감사 해시 체인과 검증기 | `tufantunc/ssh-mcp`의 감사·선택형 체인 아이디어를 검토. Shell MCP는 기존 로그 체크포인트, 전체 체인 검증, 단일 작성 잠금, 본문 비저장, 검증 CLI를 별도 구현 | 단위 시험, 기동 시 검증, CLI 검증을 확인. 구간 회전은 v0.6에서 추가 |
+| P1 / v0.6 구현 | 체인 연속성을 보존하는 감사 회전 | 원본은 100 MiB 활성 파일과 10개 번호 파일을 회전하지만 검토한 store는 활성 파일의 마지막 해시를 읽고 전체 보관 구간을 검증하는 흐름은 찾지 못함 | Shell MCP는 세그먼트 파일명에 순번 범위/head를 넣고 시작·끝 이벤트를 체인에 포함. staging 복구·hard-link 구간 보존·전체 보관 구간 검증을 구현. 구간 삭제/체인 불일치/재시작 시험으로 검증. 자동 보존기간 삭제는 하지 않아 전체 디스크 관리는 남음 |
+| P2 / 조사 필요 | 선택형 명령 승인 정책 | 최신 VS Code는 MCP Elicitation과 read-only가 아닌 도구 실행 확인을 설명함. `tufantunc/ssh-mcp`에는 승인 정책이 있지만 SECURITY에는 명령 분류기 우회 취약점이 반복 공개됨 | 기본 도구 확인과 서버 측 `ask-all`을 구분. 적용한다면 command classifier 없이 매 명령을 fail-closed로 승인하고, VS Code native dialog와 중복되지 않는 UX·무응답 클라이언트 동작을 실제 Copilot에서 시험 |
 | P3 / 조사 필요 | SFTP/아티팩트 전송 | 대용량 빌드 결과·fixture 이동에 유용할 수 있으나 현재 파일 API는 workspace 상대 경로·UTF-8 텍스트 중심 | 제한된 상대 경로, 크기·체크섬·부분 전송·덮어쓰기·symlink·실패 복구와 다운로드/업로드 감사 모델을 먼저 정하고 격리 SSH 시험 추가 |
 | P4 / 조사 필요 | PTY 기반 대화형 프로그램 | 현재 명령은 재현성 있는 non-PTY Bash를 기본으로 함. TUI/REPL 사용 요청이 확인되면 추가 이점이 있음 | PTY를 기존 managed shell과 분리된 세션 모드로 평가하고 terminal resize, ANSI 출력, interrupt, 게이트 입력, 세션 유실 시험을 설계 |
-| 보류 | 업스트림의 직접 SSH credential/profile, 임의 HTTP 상태 화면, 명령 문자열 위험 분류 | 본 프로젝트는 설치 PC의 OpenSSH config·키·agent, 기존 소유권 보호, 인증된 읽기 전용 브라우저 뷰가 요구됨. 원본 SECURITY 문서도 분류 한계를 경고 | 요구사항이 바뀌지 않는 한 현재 모델을 대체하지 않음 |
+| 보류 | 업스트림의 직접 SSH credential/profile, 임의 HTTP 상태 화면, 명령 문자열 위험 분류 | 본 프로젝트는 설치 PC의 OpenSSH config·키·agent, 기존 소유권 보호, 인증된 읽기 전용 브라우저 뷰가 요구됨. 원본 SECURITY 문서에는 classifier bypass 관련 공개 권고가 여러 개 있음 | 요구사항이 바뀌지 않는 한 현재 모델을 대체하지 않음 |
 
 ## 2026-10-22 현재 조사 입력
 
 - [tufantunc/ssh-mcp 기준 리비전](https://github.com/tufantunc/ssh-mcp/tree/5c5b8476492cda568fca779b307ff8a2ca0bbbb7): `5c5b8476492cda568fca779b307ff8a2ca0bbbb7`.
 - [README와 기능 개요](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/README.md), [보안 한계](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/SECURITY.md), [감사 저장소](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/audit/store.ts), [세션 초기화](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/ssh/session-manager.ts), [HTTP transport](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/transport/http.ts).
+- 해당 감사 저장소는 활성 로그 100 MiB, 최대 10개 번호 보관 파일을 기준으로 회전합니다. `loadLastHash`는 활성 로그 파일의 끝 최대 8192바이트에서 마지막 selfHash를 읽습니다. 읽은 범위에서는 전체 번호 보관 파일을 잇달아 검증하는 경로를 확인하지 못했습니다. Shell MCP는 보관 파일을 삭제하지 않고 전체 구간을 연결·검사하는 방향으로 적응했습니다.
+- [현재 VS Code MCP 안내](https://code.visualstudio.com/api/extension-guides/ai/mcp)는 Elicitation과 `readOnlyHint`가 아닌 도구의 실행 확인을 설명합니다. 이는 사용자 PC의 실제 Copilot harness에서 서버 측 승인 요청이 동작한다는 증거가 아니며, 해당 연결은 아직 NOT RUN입니다.
 - [VS Code MCP 서버 설정](https://code.visualstudio.com/docs/agent-customization/mcp-servers)과 [MCP Elicitation API](https://code.visualstudio.com/api/extension-guides/ai/mcp). 이 문서가 기능을 설명한다는 사실은 현재 PC의 Copilot 버전·정책이 승인 UI를 실제 표시한다는 수용 증거가 아닙니다.
 - 상세 관찰·채택 판단은 [UPSTREAM_REVIEW](UPSTREAM_REVIEW.md)에 있습니다. 조사 당시 원본을 실행하지 않았으므로 원본 코드의 동작 검증으로 간주하지 않습니다.
 
-기능 백로그는 순위가 낮아도 사용자 요청과 새 조사 결과에 따라 다시 평가합니다. 현재 활성 개선 목표는 다음 기능을 구현하고 검증 기록을 갱신하는 것입니다.
+기능 백로그는 순위가 낮아도 사용자 요청과 새 조사 결과에 따라 다시 평가합니다. v0.6 회전·복구가 끝났으며, 다음은 native tool confirmation과 서버 측 선택형 `ask-all`의 역할을 실제 Copilot harness에서 검증하고 설계를 좁히는 라운드입니다.

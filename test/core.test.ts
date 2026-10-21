@@ -30,3 +30,10 @@ test('config rejects non-loopback listeners and unsafe target aliases',()=>{
   assert.throws(()=>parseConfig({host:'0.0.0.0',auth:{mode:'token'},targets:{}}));
   assert.throws(()=>parseConfig({auth:{mode:'token'},targets:{t:{sshAlias:'-oProxyCommand=bad',principals:['owner'],workspaces:{w:'/tmp'}}}}));
 });
+test('audit segment size has a bounded default and rejects unsafe limits',()=>{
+  const config=parseConfig({auth:{mode:'token'},targets:{}});
+  assert.equal(config.audit.maxFileBytes,10*1024*1024);
+  assert.equal(parseConfig({auth:{mode:'token'},audit:{maxFileBytes:16384},targets:{}}).audit.maxFileBytes,16384);
+  assert.throws(()=>parseConfig({auth:{mode:'token'},audit:{maxFileBytes:8192},targets:{}}));
+  assert.throws(()=>parseConfig({auth:{mode:'token'},audit:{maxFileBytes:1073741825},targets:{}}));
+});

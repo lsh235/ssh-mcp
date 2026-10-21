@@ -10,7 +10,7 @@ if (!path) {
     const result = verifyAuditFile(resolve(path));
     process.stdout.write(`Valid JSONL records: ${result.legacyRecords + result.chainedRecords}\n`);
     if (result.chainStarted) {
-      process.stdout.write(`Hash chain: verified (${result.chainedRecords} chained records)\n`);
+      process.stdout.write(`Hash chain: verified (${result.chainedRecords} chained records across ${result.segments} segments)\n`);
       process.stdout.write(`Head: ${result.headHash}\n`);
     } else {
       process.stdout.write(`Hash chain: not started (${result.legacyRecords} legacy records only)\n`);

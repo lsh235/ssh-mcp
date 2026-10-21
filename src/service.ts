@@ -24,7 +24,7 @@ export class ShellService {
   private jobs=new Set<Promise<void>>();
   constructor(readonly config: Config) {
     mkdirSync(config.stateDir, { recursive:true, mode:0o700 }); chmodSync(config.stateDir,0o700);
-    this.auditLog = new AuditLog(join(config.stateDir,'audit.jsonl'));
+    this.auditLog = new AuditLog(join(config.stateDir,'audit.jsonl'),{maxFileBytes:config.audit.maxFileBytes});
     try {
       this.store = new Store(config.stateDir);
       mkdirSync(join(config.stateDir, 'outputs'), { recursive:true, mode:0o700 });

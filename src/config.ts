@@ -20,6 +20,9 @@ export const configSchema = z.object({
   allowedHosts: z.array(z.string()).min(1).default(['127.0.0.1', 'localhost']),
   allowedOrigins: z.array(z.url()).default([]),
   stateDir: z.string().default('.state'),
+  audit: z.object({
+    maxFileBytes: z.number().int().min(16384).max(1073741824).default(10485760)
+  }).prefault({}),
   auth: z.discriminatedUnion('mode', [
     z.object({ mode: z.literal('token'), tokenEnv: z.string().default('SHELL_MCP_TOKEN'), principal: z.string().min(1).default('owner') }),
     z.object({ mode: z.literal('oauth'), issuer: httpsUrl, audience: z.string().min(1), jwksUrl: httpsUrl,
