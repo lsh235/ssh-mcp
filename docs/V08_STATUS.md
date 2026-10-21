@@ -28,7 +28,7 @@
 - 이번 SSH 시험에서 B와 C는 같은 테스트 호스트의 별도 loopback SSH 역할입니다. 실제 별도 PC, ProxyJump, 사용자 ssh-agent, 사용자 postLogin 장비에서 파일을 이동한 것은 아닙니다.
 - 실제 VS Code Integrated Browser의 파일 picker, 다운로드 UI·경로, 브라우저 메모리 사용은 이 환경에서 실행하지 않았습니다. 브라우저 API 통합 시험은 Node HTTP client를 사용합니다.
 - 외부 OAuth provider, 공개 HTTPS reverse proxy, 외부 방화벽, 사용자 Copilot session에서 MCP 도구와 browser 페이지의 조합은 확인하지 않았습니다.
-- 페이지를 강제로 종료하거나 B가 비정상 중단된 경우 브라우저 request ID를 다시 얻지 못할 수 있습니다. 완료 파일은 덮어쓰지 않으며 B의 미완료 임시 업로드는 다음 기동 때 정리하지만, C에 숨김 `.part` 조각이 남을 가능성이 있습니다. 다음 조사 라운드는 확인 가능한 journal, 안전한 재개/폐기, 오래된 원격 조각 정리 정책을 다룹니다.
+- 페이지를 강제로 종료하거나 B가 비정상 중단된 경우 브라우저 request ID를 다시 얻지 못할 수 있습니다. 완료 파일은 덮어쓰지 않으며 B의 미완료 임시 업로드는 다음 기동 때 정리합니다. C의 고아 worker directory는 v0.8.1에서 다음 SSH 연결 때 안전 조건에 따라 정리합니다. 세부 시험과 제한은 [V081_STATUS](V081_STATUS.md)를 참조하세요.
 - 사용자가 다운로드를 AI agent와 공유하면 브라우저에서 본 파일이 별도 AI context가 될 수 있습니다. 서버가 파일 바이트를 MCP 응답에 포함하지 않는다는 점과 클라이언트 공유 정책은 구분해야 합니다.
 
 참고한 업스트림 구현·판단은 [UPSTREAM_REVIEW](UPSTREAM_REVIEW.md)와 [UPSTREAM_MIGRATION](UPSTREAM_MIGRATION.md)에 기록했습니다.

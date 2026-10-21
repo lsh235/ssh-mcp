@@ -33,7 +33,8 @@
 | P2 / v0.7 구현 | 제한된 원격 파일 목록과 메타데이터 | `tufantunc/ssh-mcp`의 bounded `sftp-list`는 디렉터리 항목/응답 바이트 제한을 설명함. OpenSSH `sftp ls -l`도 상세 파일 정보를 노출. Shell MCP는 workspace 제한이 있으므로 직접 SFTP 경로 모델보다 기존 helper와 `lstat` 경계를 사용 | 최대 10,000개 항목/8 MiB 이름 데이터, 100개 페이지, 일반 파일 크기·수정 시각·권한 표시. symlink 대상 추적 금지. 대형 목록에 `incomplete`와 제한 사유 표시. 실제 SSH 시험 통과 |
 | P3 / 조사 필요 | 선택형 명령 승인 정책 | VS Code는 `readOnlyHint`가 아닌 도구의 확인 UI와 Elicitation을 설명함. `tufantunc/ssh-mcp`에는 승인 정책이 있지만 SECURITY/changelog에 명령 분류기 우회가 반복 공개됨 | 기본 도구 확인과 서버 측 `ask-all`을 구분. 적용한다면 classifier 없이 매 명령을 fail-closed로 승인하고 실제 Copilot에서 native dialog 중복·무응답 동작을 검증 |
 | P4 / v0.8 구현 | 브라우저 경유 아티팩트 이동 | 업스트림은 제한된 transfer root와 모델 문맥 밖 파일 streaming을 제공. B의 로컬 경로가 A의 로컬 파일을 가리키지는 않으므로 브라우저가 선택한 파일을 A→B→C로 전달 | 최대 64 MiB 기본/256 MiB 설정 상한, 1 MiB 청크 업로드, 2 MiB 청크 다운로드, SHA-256, create-only 원자적 게시, 요청 ID 중복 조회, 세션·workspace 경계, 감사, postLogin helper 재사용을 구현. 격리 OpenSSH 실험 통과 |
-| P5 / 조사 필요 | 재개 가능한 전송과 미완료 조각 관리 | 동일 페이지의 요청 ID는 재조회할 수 있지만 서버 재시작 뒤 브라우저가 요청 ID를 잃고, remote `.part`가 남을 수 있음 | 전송 journal 지속 범위, 원격 조각 청소의 소유권·보존 기한, 사용자 승인 재개/폐기 UX를 웹 조사와 함께 설계. unknown 결과 자동 재실행은 하지 않음 |
+| v0.8.1 구현 / 재개는 보류 | 재시작 뒤 고아 transfer spool 정리 | 업스트림 SFTP는 실패 `.part`를 정리하지만 이어쓰기 재개는 제공하지 않음. OpenBSD `sftp -a`는 부분 내용 불일치 시 손상 가능성을 경고 | 새 SSH worker가 24시간 지난 private 작업 디렉터리에서 죽은 PID/start-time을 확인해 비재귀 정리. 활성·최근·신원 불명·예상 밖 파일 구조는 보존. 자동 resume는 source/checksum/remote identity/progress journal과 client 재선택 경험을 별도 설계할 때까지 보류 |
+| P5 / 조사 필요 | 사용자 승인형 transfer 재개 | 재개는 요청 ID 재조회보다 더 강한 보장 필요: 원본 브라우저 파일 재선택·hash 동일성, 원격 조각 offset/checksum, 재기동 journal, session/view ownership 확인 | 자동 이어쓰기는 하지 않음. 안정적인 resume protocol과 VS Code 브라우저 파일 재선택 UX를 정식 조사한 뒤 별도 설계 |
 | P5 / 조사 필요 | PTY 기반 대화형 프로그램 | 현재 명령은 재현성 있는 non-PTY Bash를 기본으로 함. TUI/REPL 사용 요청이 확인되면 추가 이점이 있음 | PTY를 기존 managed shell과 분리된 세션 모드로 평가하고 terminal resize, ANSI 출력, interrupt, 게이트 입력, 세션 유실 시험을 설계 |
 | 보류 | 업스트림의 직접 SSH credential/profile, 임의 HTTP 상태 화면, 명령 문자열 위험 분류 | 본 프로젝트는 설치 PC의 OpenSSH config·키·agent, 기존 소유권 보호, 인증된 읽기 전용 브라우저 뷰가 요구됨. 원본 SECURITY 문서에는 classifier bypass 관련 공개 권고가 여러 개 있음 | 요구사항이 바뀌지 않는 한 현재 모델을 대체하지 않음 |
 
@@ -60,4 +61,10 @@
 - A→B의 private staging, B→C의 1 MiB 체크섬 청크와 create-only hard-link 게시, C→B 임시 snapshot과 SHA-256 검증, B→A 브라우저 streaming을 구현했습니다. 덮어쓰기·symlink·workspace 밖 경로를 거부하고 request ID 응답 재조회, 서버 재기동 후 unknown 전환, 동시/누적 transfer 상한, audit 이벤트를 추가했습니다.
 - 소스 코드는 복사하지 않았습니다. 격리 OpenSSH 통합 시험에서 2 MiB 초과 바이너리 왕복·checksum·중복 요청·충돌·기존 파일 보호·view 밖 session·symlink 거부를 확인했습니다. 사용자 VS Code Browser의 로컬 파일 선택/다운로드 UX는 별도 NOT RUN입니다.
 
-기능 백로그는 매 라운드 새 웹 근거와 사용자 요구로 다시 정렬합니다. 현재 다음 후보는 재시작 이후의 안전한 transfer 재개·미완료 조각 보존 정책이며, unknown 결과를 자동 재실행하지 않는 원칙을 유지합니다.
+## 2026-10-22 v0.8.1 라운드
+
+- 같은 upstream revision의 [SFTP adapter](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/ssh/sftp.ts)와 [transfer tools](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/tools/transfer-tools.ts)를 다시 확인했습니다. 다운로드 staging은 `finally`에서 제거되고 streaming 업로드의 `.part`도 실패 후 정리하지만, 프로세스 종료 이후 재개 기능은 확인하지 못했습니다. OpenBSD [`sftp(1)`](https://man.openbsd.org/sftp.1)의 resume 설명은 partial 내용 불일치에 따른 corruption 위험을 명시합니다.
+- 그래서 확인되지 않은 바이트 이어쓰기를 추가하지 않고, 새 `prepare` 시 24시간 이상 지난 private remote worker directories 중 worker PID/start-time이 죽은 것으로 확인된 것만 비재귀 삭제합니다. 활성 PID, 최근 항목, identity 누락, 중첩/특수 파일은 보존합니다. 이전 결과는 계속 `unknown`이며 실행을 replay하지 않습니다.
+- 코드는 upstream에서 복사하지 않았습니다. 실제 격리 OpenSSH 시험은 stale 삭제, 오래된 live worker 보존, 최근/identity 없는/중첩 경로 보존을 확인합니다.
+
+기능 백로그는 매 라운드 새 웹 근거와 사용자 요구로 다시 정렬합니다. 다음 후보는 안전한 transfer resume protocol의 설계와 실제 VS Code 파일 재선택 UX 검증입니다. unknown 결과를 자동 재실행하지 않는 원칙을 유지합니다.

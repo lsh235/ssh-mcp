@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, symlinkSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, statSync, utimesSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { request } from 'node:http';
+import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { ShellService } from '../src/service.js';
 import { startServer } from '../src/server.js';
@@ -11,6 +13,34 @@ import { sleep } from '../src/core.js';
 import { fixture } from './fixture.js';
 
 async function wait(service:ShellService,id:string,owner='owner',timeout=15000){const end=Date.now()+timeout;while(Date.now()<end){const c=service.command(owner,id);if(!['accepted','running','cancel_requested'].includes(c.state))return c;await sleep(50);}throw new Error('Command did not complete');}
+test('new SSH sessions reap only old, private, confirmed orphan worker directories',{timeout:30000},async()=>{
+  const f=await fixture(),service=new ShellService(f.config),created:string[]=[];
+  const secondRoot=join(f.dir,'other-workspace');mkdirSync(secondRoot);f.config.targets.test.workspaces.other=secondRoot;
+  const make=(name:string,identity?:{pid:number;start:string},old=false,withChildDirectory=false)=>{
+    const path=join(tmpdir(),'shell-mcp-'+name+'-'+randomUUID());mkdirSync(path,{mode:0o700});chmodSync(path,0o700);created.push(path);
+    if(identity)writeFileSync(join(path,'identity'),JSON.stringify(identity),{mode:0o600});
+    writeFileSync(join(path,'.shell-mcp-u_'+randomUUID()+'.part'),'incomplete transfer',{mode:0o600});
+    if(withChildDirectory)mkdirSync(join(path,'nested'),{mode:0o700});
+    if(old){const timestamp=new Date(Date.now()-26*60*60*1000);utimesSync(path,timestamp,timestamp);}
+    return path;
+  };
+  try{
+    const first=await service.open('owner','test','project','reaper-first');
+    const internals=service as unknown as {runtimes:Map<string,{ssh:{remoteDir:string}}>};
+    const active=internals.runtimes.get(first.id)!.ssh.remoteDir;
+    const stale=make('orphan',{pid:2147483647,start:'1'},true);
+    const recent=make('recent',{pid:2147483647,start:'1'});
+    const unidentified=make('unidentified',undefined,true);
+    const nested=make('nested-orphan',{pid:2147483647,start:'1'},true,true);
+    const timestamp=new Date(Date.now()-26*60*60*1000);utimesSync(active,timestamp,timestamp);
+    await service.open('owner','test','other','reaper-second');
+    assert.equal(existsSync(stale),false,'old dead worker spool and partial upload are removed');
+    assert.equal(existsSync(recent),true,'recent directory is retained');
+    assert.equal(existsSync(unidentified),true,'directory without a trusted worker identity is retained');
+    assert.equal(existsSync(nested),true,'unexpected nested content is retained');
+    assert.equal(existsSync(active),true,'an old but live SSH worker directory is retained');
+  }finally{await service.shutdown();for(const path of created)rmSync(path,{recursive:true,force:true});await f.close();}
+});
 test('real OpenSSH: persistent shell, patch/test loop, output, deduplication, failures and isolation',{timeout:60000},async()=>{
   const f=await fixture(), service=new ShellService(f.config);
   try {

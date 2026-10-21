@@ -1,5 +1,13 @@
 # 오픈소스 조사 근거
 
+## 2026-10-22 v0.8.1: 고아 전송 조각 정리 재조사
+
+고정 리비전 [`tufantunc/ssh-mcp` SFTP adapter](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/ssh/sftp.ts)는 stream 업로드를 sibling `.part`에 쓰고 게시 후 정리하며, 실패한 `.part`도 best-effort로 제거합니다. 같은 리비전의 [전송 도구](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/tools/transfer-tools.ts)는 다운로드 staging을 `finally`에서 정리합니다. 재접속 후 부분 파일 이어쓰기는 구현하지 않았습니다. OpenBSD [`sftp(1)`의 `-a`](https://man.openbsd.org/sftp.1)는 끊긴 전송을 이어갈 수 있지만 부분 내용이 다르면 결과가 손상될 수 있다고 경고합니다.
+
+Shell MCP의 업로드 조각은 지속 서비스가 아니라 현재 SSH 세션의 private `/tmp/shell-mcp-*` 작업 디렉터리에 있습니다. 서버가 비정상 종료되면 C측 worker가 끝나도 그 디렉터리가 남을 수 있습니다. 바이트 오프셋만 믿는 이어쓰기는 source 재선택, 체크섬 prefix 검증, 원격 file identity·동시 변경 감시, 브라우저 재시작 뒤 권한 확인을 요구하므로 이번 라운드에서는 채택하지 않았습니다.
+
+대신 새 SSH worker의 `prepare`가 24시간 이상 된 private 작업 디렉터리를 제한적으로 조사합니다. 저장된 PID와 `/proc/<pid>/stat` 시작 시각이 같은 살아 있는 프로세스는 나이에 관계없이 보존하고, dead/mismatched PID가 확인된 디렉터리만 지웁니다. 현재 사용자 소유·정확한 0700 디렉터리, 정규 `identity` 파일, 비재귀 파일 목록, scan/file count 상한을 검사합니다. 신원을 확인할 수 없거나 하위 디렉터리·특수 파일이 있으면 남겨 둡니다. 정리는 다음 연결 때만 실행되므로 대상에 재접속하지 않으면 조각이 계속 남을 수 있습니다. 기존 transfer 결과는 `unknown`으로 유지되며 자동 명령 재실행·전송 재개는 하지 않습니다.
+
 ## 2026-10-22 v0.8: 파일 streaming 재검토
 
 `tufantunc/ssh-mcp`의 고정 리비전 `5c5b8476492cda568fca779b307ff8a2ca0bbbb7`에서 [전송 도구](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/tools/transfer-tools.ts), [SFTP 계층](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/ssh/sftp.ts), [README](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/README.md)를 다시 읽었습니다. 소스는 별도 구현이며 코드 복사는 없습니다. 중요한 기능은 파일 내용을 AI tool result에 싣지 않는 streaming, server-private staging, 크기 제한, 중복/부분 실패 정리였습니다.

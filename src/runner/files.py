@@ -3,6 +3,9 @@ import base64, hashlib, json, os, pathlib, re, signal, stat, sys, tempfile, time
 
 MAX_DIRECTORY_ENTRIES = 10000
 MAX_DIRECTORY_NAME_BYTES = 8 * 1024 * 1024
+ORPHAN_SESSION_AGE_SECONDS = 24 * 60 * 60
+ORPHAN_SESSION_SCAN_LIMIT = 5000
+ORPHAN_SESSION_FILE_LIMIT = 10000
 
 class Failure(Exception):
     def __init__(self, code, message):
@@ -76,6 +79,80 @@ def save_transfer(directory, data):
     finally:
         if os.path.exists(temporary): os.unlink(temporary)
 
+def orphan_process_state(pid, start):
+    try:
+        fields = pathlib.Path('/proc', str(pid), 'stat').read_text().rsplit(')', 1)[1].split()
+    except FileNotFoundError:
+        return 'dead'
+    except (OSError, IndexError):
+        return 'unknown'
+    if len(fields) <= 19:
+        return 'unknown'
+    if fields[19] != start or fields[0] == 'Z':
+        return 'dead'
+    return 'alive'
+
+def cleanup_orphan_sessions():
+    cutoff = time.time() - ORPHAN_SESSION_AGE_SECONDS
+    examined = removed = 0
+    try:
+        listing = os.scandir(tempfile.gettempdir())
+    except OSError:
+        return 0
+    with listing:
+        for entry in listing:
+            examined += 1
+            if examined > ORPHAN_SESSION_SCAN_LIMIT:
+                break
+            if not entry.name.startswith('shell-mcp-'):
+                continue
+            try:
+                info = entry.stat(follow_symlinks=False)
+                if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                    or stat.S_IMODE(info.st_mode) != 0o700 or info.st_mtime > cutoff):
+                    continue
+                directory = pathlib.Path(entry.path)
+                identity_path = directory / 'identity'
+                identity_fd = os.open(identity_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                with os.fdopen(identity_fd, 'r', encoding='utf-8') as identity_file:
+                    identity_info = os.fstat(identity_file.fileno())
+                    if (not stat.S_ISREG(identity_info.st_mode) or identity_info.st_uid != os.getuid()
+                        or identity_info.st_size > 4096):
+                        continue
+                    identity = json.load(identity_file)
+                if not isinstance(identity, dict):
+                    continue
+                pid, start = identity.get('pid'), identity.get('start')
+                if (isinstance(pid, bool) or not isinstance(pid, int) or pid <= 1
+                    or not isinstance(start, str) or not re.fullmatch(r'\d+', start)):
+                    continue
+                if orphan_process_state(pid, start) != 'dead':
+                    continue
+                names = []
+                safe = True
+                with os.scandir(directory) as children:
+                    for child in children:
+                        if len(names) >= ORPHAN_SESSION_FILE_LIMIT:
+                            safe = False
+                            break
+                        child_info = child.stat(follow_symlinks=False)
+                        if stat.S_ISDIR(child_info.st_mode) or not (
+                            stat.S_ISREG(child_info.st_mode) or stat.S_ISLNK(child_info.st_mode)
+                        ):
+                            safe = False
+                            break
+                        names.append(child.name)
+                if not safe:
+                    continue
+                for name in names:
+                    os.unlink(directory / name)
+                os.rmdir(directory)
+                removed += 1
+            except (OSError, ValueError, TypeError, KeyError):
+                # Cleanup is opportunistic; invalid or busy directories remain untouched.
+                continue
+    return removed
+
 def hash_regular(path, limit):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     digest, size = hashlib.sha256(), 0
@@ -95,6 +172,7 @@ def main(a):
     if op == 'prepare':
         root = str(pathlib.Path(a['root']).resolve(strict=True))
         if not os.path.isdir(root): fail('INVALID_WORKSPACE', 'Workspace is not a directory')
+        cleanup_orphan_sessions()
         directory = tempfile.mkdtemp(prefix='shell-mcp-')
         return {'dir': directory, 'root': root}
     directory = a.get('dir')
