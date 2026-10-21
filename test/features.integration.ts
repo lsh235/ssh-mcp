@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { ShellService } from '../src/service.js';
@@ -21,6 +21,12 @@ test('pipe stdin: progressive input, duplicate safety, EOF and persistent Bash s
     assert.equal((await service.sendInput('owner',c.id,'unique-first\n',false,'first')).id,first.id);
     await assert.rejects(service.sendInput('owner',c.id,'different\n',false,'first'),{code:'REQUEST_CONFLICT'});
     const second=await service.sendInput('owner',c.id,'second\nremaining',true,'second');assert.equal(second.state,'published');
+    const audit=readFileSync(join(f.config.stateDir,'audit.jsonl'),'utf8');
+    const auditRows=audit.trimEnd().split('\n').map(line=>JSON.parse(line) as {event:string;id:string});
+    const requestIndex=auditRows.findIndex(row=>row.event==='input_requested'&&row.id===first.id);
+    const resultIndex=auditRows.findIndex(row=>row.event==='input'&&row.id===first.id);
+    assert.ok(requestIndex>=0&&requestIndex<resultIndex,'input intent must be audited before remote publication');
+    assert.ok(!audit.includes('unique-first')&&!audit.includes('second\\nremaining'),'stdin contents must not enter the audit log');
     const done=await terminal(service,c.id);assert.equal(done.exitCode,0);assert.equal(done.inputSequence,2);assert.equal(done.stdinClosed,true);
     assert.equal(service.readOutput('owner',c.id,'stdout').content,'ready\nunique-first|second|remaining\n');
     await assert.rejects(service.sendInput('owner',c.id,'late',false,'late'),{code:'COMMAND_FINISHED'});

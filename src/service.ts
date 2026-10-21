@@ -1,8 +1,9 @@
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, closeSync, existsSync, mkdirSync, openSync, readSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { applyPatch, parsePatch } from 'diff';
 import type { Config, Target } from './config.js';
 import { assert, Fault, hash, quote, sleep, uid } from './core.js';
+import { AuditLog } from './audit.js';
 import { Store, type RecordValue } from './storage.js';
 import { SSHConnection } from './ssh.js';
 import { pageBounds } from './upstream/output-page.js';
@@ -16,17 +17,28 @@ interface Command extends RecordValue {
 interface Runtime { ssh: SSHConnection; busy: boolean; commandId?: string; cancelling: boolean; touched: number; job?: Promise<void>; inputBusy?: boolean; }
 export class ShellService {
   readonly store: Store;
+  private readonly auditLog: AuditLog;
   private runtimes = new Map<string, Runtime>();
   private timer: NodeJS.Timeout;
   private stopping = false;
   private jobs=new Set<Promise<void>>();
   constructor(readonly config: Config) {
-    this.store = new Store(config.stateDir);
-    mkdirSync(join(config.stateDir, 'outputs'), { recursive:true, mode:0o700 });
+    mkdirSync(config.stateDir, { recursive:true, mode:0o700 }); chmodSync(config.stateDir,0o700);
+    this.auditLog = new AuditLog(join(config.stateDir,'audit.jsonl'));
+    try {
+      this.store = new Store(config.stateDir);
+      mkdirSync(join(config.stateDir, 'outputs'), { recursive:true, mode:0o700 });
+    } catch (error) {
+      this.auditLog.close();
+      throw error;
+    }
     this.timer = setInterval(() => { void this.sweep(); }, Math.min(config.limits.idleMs, 30000)); this.timer.unref();
   }
   private audit(event: string, owner: string, id: string, state: string) {
-    appendFileSync(join(this.config.stateDir, 'audit.jsonl'), JSON.stringify({at:new Date().toISOString(), event, owner, id, state})+'\n', {mode:0o600});
+    this.auditLog.append({event,owner,id,state});
+  }
+  private assertAuditHealthy() {
+    assert(this.auditLog.healthy,'AUDIT_UNAVAILABLE','Audit log is unavailable; remote changes are disabled');
   }
   private target(owner: string, targetId: string): Target {
     const t = this.config.targets[targetId]; assert(t?.principals.includes(owner), 'FORBIDDEN', 'Target is not permitted'); return t;
@@ -82,6 +94,7 @@ export class ShellService {
     const t = this.target(owner,targetId), root = t.workspaces[workspaceId]; assert(root,'INVALID_WORKSPACE','Unknown workspace');
     const digest = hash(JSON.stringify([targetId,workspaceId]));
     const prior = this.store.request(owner,scope,key,digest); if (prior) return this.session(owner,prior);
+    this.assertAuditHealthy();
     assert(this.runtimes.size < this.config.limits.maxSessions,'RESOURCE_LIMIT','Maximum live sessions reached');
     for (const session of this.store.list('session')) {
       if (['ready','busy','opening'].includes(session.state) && this.config.targets[session.targetId as string]?.sshAlias === t.sshAlias && (session.root === root || session.targetId === targetId && session.workspaceId === workspaceId)) {
@@ -100,7 +113,7 @@ export class ShellService {
         const command = this.command(owner,r.commandId);
         if (['accepted','running'].includes(command.state)) this.store.put('command',{...command,state:'unknown',exitCode:null,outputComplete:false,reason});
       }
-      this.audit('connection_lost',owner,id,reason);
+      try { this.audit('connection_lost',owner,id,reason); } catch { /* the failed audit chain already blocks new mutations */ }
     };
     try {
       await ssh.open(root); s.root=ssh.root; s.cwd=ssh.root; s.state='ready';
@@ -145,6 +158,7 @@ export class ShellService {
     assert(c.inputMode==='pipe','STDIN_DISABLED','Start this command with inputMode=pipe');
     assert(!c.stdinClosed,'STDIN_CLOSED','EOF has already been sent');
     assert(!c.inputUncertain,'INPUT_UNCERTAIN','A previous input has uncertain delivery; do not repeat it');
+    this.assertAuditHealthy();
     const {r}=this.runtime(owner,c.sessionId);
     assert(!r.inputBusy,'INPUT_BUSY','Another input is being delivered');
     assert(r.commandId===id&&!r.cancelling,'COMMAND_FINISHED','Command is not active');
@@ -156,6 +170,8 @@ export class ShellService {
     r.inputBusy=true;
     const inputId=uid('i');let input:RecordValue={id:inputId,owner,commandId:id,state:'accepted',sequence,bytes,end,updatedAt:Date.now()};
     try{
+      // Record the intent before sending any input to the remote process. Never persist its contents.
+      this.audit('input_requested',owner,inputId,'delivery_requested');
       this.store.put('input',input);this.store.remember(owner,scope,key,digest,inputId);
       this.store.put('command',{...c,inputSequence:sequence,inputBytes:(c.inputBytes??0)+bytes});
       try{
@@ -176,6 +192,7 @@ export class ShellService {
     if(displayName!==undefined)payload.push({displayName});
     const s = this.session(owner,id), digest = hash(JSON.stringify(payload));
     const prior = this.store.request(owner,id,key,digest); if (prior) return this.command(owner,prior);
+    this.assertAuditHealthy();
     const {r} = this.runtime(owner,id); assert(!r.busy,'SESSION_BUSY','A command or mutation is already running');
     assert(deadlineMs<=this.config.limits.maxCommandMs,'INVALID_DEADLINE','Deadline exceeds server policy');
     assert(this.store.list('command').length<10000,'RESOURCE_LIMIT','Command history limit reached; expire old history before submitting more');
@@ -184,7 +201,16 @@ export class ShellService {
     this.store.put('command',c); this.store.remember(owner,id,key,digest,c.id);
     for (const stream of ['stdout','stderr']) writeFileSync(this.outputPath(c.id,stream),'',{mode:0o600});
     r.busy=true; r.commandId=c.id; this.store.put('session',{...s,state:'busy'});
-    this.audit('command_accepted',owner,c.id,'accepted');
+    try {
+      this.audit('command_accepted',owner,c.id,'accepted');
+    } catch {
+      this.store.put('command',{...c,state:'unknown',reason:'AUDIT_WRITE_FAILED',exitCode:null,outputComplete:false,endedAt:Date.now()});
+      this.store.put('session',{...s,state:'broken',reason:'AUDIT_WRITE_FAILED'});
+      r.busy=false; r.commandId=undefined;
+      this.runtimes.delete(id);
+      await r.ssh.close().catch(()=>{});
+      throw new Fault('AUDIT_UNAVAILABLE','Command was not sent because its admission could not be recorded');
+    }
     // Admission is durable. This job is owned by the service, never the HTTP request.
     const job=this.execute(owner,c.id,r,command).catch(() => {}); r.job=job;
     this.jobs.add(job); void job.finally(()=>this.jobs.delete(job));
@@ -279,6 +305,7 @@ export class ShellService {
   async patch(owner:string,id:string,patch:string,versions:Record<string,string|null>,key:string) {
     this.session(owner,id); const scope=`patch:${id}`, digest=hash(JSON.stringify([patch,Object.entries(versions).sort()]));
     const prior=this.store.request(owner,scope,key,digest); if (prior) return this.store.get('patch',prior,owner);
+    this.assertAuditHealthy();
     return this.locked(owner,id,true,async(ssh,s)=>{
       const patches=parsePatch(patch); assert(patches.length>0 && patches.length<=20,'INVALID_PATCH','Expected a unified diff for 1 to 20 files');
       const files: {path:string;expectedVersion:string|null;content:string|null}[]=[]; const seen=new Set<string>();
@@ -297,8 +324,12 @@ export class ShellService {
         files.push({path,expectedVersion:expected,content:newName==='/dev/null'?null:Buffer.from(next).toString('base64')});
       }
       const pid=uid('p'); this.store.put('patch',{id:pid,owner,state:'unknown',updatedAt:Date.now(),reason:'ADMITTED'}); this.store.remember(owner,scope,key,digest,pid);
+      this.audit('patch_started',owner,pid,'applying');
       const result=await ssh.helper<{state:string;files:unknown[]}>({op:'apply',root:s.root,files});
-      const row=this.store.put('patch',{id:pid,owner,updatedAt:Date.now(),...result}); this.audit('patch',owner,pid,row.state); return row;
+      const row=this.store.put('patch',{id:pid,owner,updatedAt:Date.now(),...result});
+      try { this.audit('patch',owner,pid,row.state); }
+      catch { return {...row,auditWarning:'AUDIT_WRITE_FAILED'}; }
+      return row;
     });
   }
   git(owner:string,id:string,mode:'status'|'diff',paths:string[]=[]) {
@@ -319,12 +350,17 @@ export class ShellService {
   }
   async shutdown() {
     this.stopping=true; clearInterval(this.timer);
-    for(const [id,r]of this.runtimes){
-      if(r.commandId)await this.cancel(this.sessionOwner(id),r.commandId).catch(()=>{});
-      else {await r.ssh.close(); const s=this.store.list('session').find(s=>s.id===id);if(s)this.store.put('session',{...s,state:'closed'});}
+    try {
+      for(const [id,r]of this.runtimes){
+        if(r.commandId)await this.cancel(this.sessionOwner(id),r.commandId).catch(()=>{});
+        else {await r.ssh.close(); const s=this.store.list('session').find(s=>s.id===id);if(s)this.store.put('session',{...s,state:'closed'});}
+      }
+      // Allow command finalizers to finish before closing SQLite and the audit chain.
+      await Promise.allSettled([...this.jobs]); this.runtimes.clear();
+    } finally {
+      try { this.store.close(); }
+      finally { this.auditLog.close(); }
     }
-    // Allow command finalizers to finish before closing SQLite.
-    await Promise.allSettled([...this.jobs]); this.runtimes.clear(); this.store.close();
   }
   private sessionOwner(id:string){return this.store.list('session').find(s=>s.id===id)!.owner;}
 }

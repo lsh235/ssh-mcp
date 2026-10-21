@@ -3,8 +3,8 @@ import { loadConfig } from './config.js';
 import { startServer } from './server.js';
 const args=process.argv.slice(2);
 if(args.includes('--help')) {
-  console.log('Shell MCP 0.4.0\nUsage: node dist/cli.js --config /absolute/path/config.json\nRequires: Linux, Node >=22.16, OpenSSH; target: Bash, Python >=3.9, setsid.\nCredentials are read only on this MCP host. See docs/OPERATIONS.md.');
-}else if(args.includes('--version'))console.log('0.4.0');
+  console.log('Shell MCP 0.5.0\nUsage: node dist/cli.js --config /absolute/path/config.json\nRequires: Linux, Node >=22.16, OpenSSH; target: Bash, Python >=3.9, setsid.\nCredentials are read only on this MCP host. See docs/OPERATIONS.md.');
+}else if(args.includes('--version'))console.log('0.5.0');
 else {
   try {
     process.umask(0o077);

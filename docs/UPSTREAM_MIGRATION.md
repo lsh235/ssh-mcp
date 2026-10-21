@@ -1,0 +1,45 @@
+# 업스트림 기능 조사와 마이그레이션 절차
+
+이 문서는 Shell MCP를 여러 SSH 대상의 원격 개발에 맞게 지속 발전시키기 위한 반복 작업 기준입니다. 기능을 많이 복사하는 것이 목표가 아닙니다. 웹사이트에서 최신 근거를 조사하고, 현재 배치·인증·세션 모델에 맞는 기능만 골라 구현과 검증 결과를 남깁니다. AI API는 추가하지 않으며, 연결된 Copilot/Codex가 모델 역할을 제공합니다.
+
+## 반복 절차
+
+각 개선 라운드는 다음 순서로 진행합니다.
+
+1. **웹 조사:** 원본 저장소의 기본 브랜치 커밋을 기록하고 README, 릴리스/변경 기록, 보안 문서, 실제 관련 소스를 확인합니다. `main`/`master` URL만 고정 근거로 쓰지 않습니다. 유행하는 기능 소개보다 동작 경로와 실패 처리를 우선합니다.
+2. **적합성 판단:** 기능이 해결하는 사용자 문제, Shell MCP의 B→C OpenSSH 구조와의 적합성, 권한·비밀·실행 영향, 클라이언트 호환성, 유지비용, 라이선스를 기록합니다. 문자열 분류기 같은 우회 가능한 방어는 보안 경계로 취급하지 않습니다.
+3. **작은 단위로 설계:** 상태 전이, 재시도/응답 유실, 여러 대상의 소유권, 셸 생명주기, 감사 추적을 정의합니다. 기존 동작과 설정의 호환성 및 마이그레이션 경로를 지정합니다.
+4. **이식·구현:** 개념만 참고했는지, 코드를 실제로 가져왔는지 구분합니다. 가져온 코드에는 파일·커밋·라이선스·변경 내역을 `THIRD_PARTY_NOTICES.md`에 추가합니다. 테스트 fixture는 격리된 OpenSSH/임시 디렉터리를 사용합니다.
+5. **검증·보고:** `npm run check`와 `npm run smoke`를 수행하고, 실제 VS Code/Copilot, 외부 IdP, 공개 HTTPS, 긴 soak가 실행되지 않았다면 별도로 NOT RUN이라 기록합니다. 빌드·로컬 시험을 운영 수용으로 표현하지 않습니다.
+6. **다음 라운드 갱신:** 이 표의 상태·우선순위·출처 리비전을 갱신합니다. 차기 후보가 새 웹 조사에서 부적합해지면 사유를 남기고 재정렬합니다.
+
+## 채택 기준
+
+기능은 아래 기준을 만족할수록 우선합니다.
+
+- 현재의 원격 개발 루프에서 분명한 반복 문제를 해결합니다.
+- 서버가 권한과 상태를 검사할 수 있으며 실패를 성공처럼 표시하지 않습니다.
+- 명령·입력·로그인 게이트 비밀을 MCP 요청/감사 기록에 노출하지 않습니다.
+- 응답 유실 뒤 재호출해도 중복 실행 위험이 증가하지 않습니다.
+- 사용자에게 위험 승인을 요구한다면 실제 MCP 클라이언트가 지원하는 승인 경로를 사용하고, 이를 보안 격리라고 과장하지 않습니다.
+- 필요한 테스트와 운영 설명을 함께 제공할 수 있습니다.
+
+## 기능 백로그
+
+| 순위 / 상태 | 기능 | 조사 근거와 현재 판단 | 다음 작업 / 완료 증거 |
+| --- | --- | --- | --- |
+| P0 / v0.5 구현 | JSONL 감사 해시 체인과 검증기 | `tufantunc/ssh-mcp`의 감사·선택형 체인·회전 아이디어를 검토. Shell MCP는 기존 로그 체크포인트, 전체 체인 검증, 단일 작성 잠금, 본문 비저장, 검증 CLI를 별도 구현 | 단위 시험, 기동 시 검증, CLI 검증을 확인. 회전은 미지원이며 별도 P1 |
+| P1 / 조사 필요 | 체인 연속성을 보존하는 감사 회전 | 원본은 회전 아이디어를 제공하지만 Shell MCP의 단일 파일 체인은 임의 rename/truncate를 허용하지 않음 | 세그먼트 manifest, 이전 세그먼트 head 연결, 원자적 교체·디스크 부족·복구 시험을 설계. 운영자 삭제와 서버 재기동 경계 검증 후 구현 |
+| P2 / 조사 필요 | 명령 전 승인·읽기 전용 정책 | 원본의 역할별 명령 분류와 승인 흐름을 검토했으나 분류 우회 경고가 있어 그대로 채택하지 않음. [VS Code MCP 문서](https://code.visualstudio.com/api/extension-guides/ai/mcp)는 Elicitation 지원을 설명하지만 실제 사용자 Copilot 시험은 별도 | 실행 전 서버 정책과 클라이언트 승인 능력을 확인. 요청을 구별하는 `ask`는 fail-closed; 문자열 기반 추정만으로 위험 명령을 허용하지 않음. 미지원 클라이언트의 동작과 실제 VS Code 수용 시험 포함 |
+| P3 / 조사 필요 | SFTP/아티팩트 전송 | 대용량 빌드 결과·fixture 이동에 유용할 수 있으나 현재 파일 API는 workspace 상대 경로·UTF-8 텍스트 중심 | 제한된 상대 경로, 크기·체크섬·부분 전송·덮어쓰기·symlink·실패 복구와 다운로드/업로드 감사 모델을 먼저 정하고 격리 SSH 시험 추가 |
+| P4 / 조사 필요 | PTY 기반 대화형 프로그램 | 현재 명령은 재현성 있는 non-PTY Bash를 기본으로 함. TUI/REPL 사용 요청이 확인되면 추가 이점이 있음 | PTY를 기존 managed shell과 분리된 세션 모드로 평가하고 terminal resize, ANSI 출력, interrupt, 게이트 입력, 세션 유실 시험을 설계 |
+| 보류 | 업스트림의 직접 SSH credential/profile, 임의 HTTP 상태 화면, 명령 문자열 위험 분류 | 본 프로젝트는 설치 PC의 OpenSSH config·키·agent, 기존 소유권 보호, 인증된 읽기 전용 브라우저 뷰가 요구됨. 원본 SECURITY 문서도 분류 한계를 경고 | 요구사항이 바뀌지 않는 한 현재 모델을 대체하지 않음 |
+
+## 2026-10-22 현재 조사 입력
+
+- [tufantunc/ssh-mcp 기준 리비전](https://github.com/tufantunc/ssh-mcp/tree/5c5b8476492cda568fca779b307ff8a2ca0bbbb7): `5c5b8476492cda568fca779b307ff8a2ca0bbbb7`.
+- [README와 기능 개요](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/README.md), [보안 한계](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/SECURITY.md), [감사 저장소](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/audit/store.ts), [세션 초기화](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/ssh/session-manager.ts), [HTTP transport](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/transport/http.ts).
+- [VS Code MCP 서버 설정](https://code.visualstudio.com/docs/agent-customization/mcp-servers)과 [MCP Elicitation API](https://code.visualstudio.com/api/extension-guides/ai/mcp). 이 문서가 기능을 설명한다는 사실은 현재 PC의 Copilot 버전·정책이 승인 UI를 실제 표시한다는 수용 증거가 아닙니다.
+- 상세 관찰·채택 판단은 [UPSTREAM_REVIEW](UPSTREAM_REVIEW.md)에 있습니다. 조사 당시 원본을 실행하지 않았으므로 원본 코드의 동작 검증으로 간주하지 않습니다.
+
+기능 백로그는 순위가 낮아도 사용자 요청과 새 조사 결과에 따라 다시 평가합니다. 현재 활성 개선 목표는 다음 기능을 구현하고 검증 기록을 갱신하는 것입니다.
