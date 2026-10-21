@@ -1,0 +1,17 @@
+{
+  "servers": {
+    "shell-mcp": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": { "Authorization": "Bearer ${input:shell-mcp-token}" }
+    }
+  },
+  "inputs": [
+    {
+      "id": "shell-mcp-token",
+      "type": "promptString",
+      "description": "Shell MCP token (provided privately by the MCP host owner)",
+      "password": true
+    }
+  ]
+}

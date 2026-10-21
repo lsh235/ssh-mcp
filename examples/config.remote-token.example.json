@@ -1,0 +1,18 @@
+{
+  "host": "127.0.0.1",
+  "port": 8787,
+  "publicUrl": "https://mcp.example.com/mcp",
+  "allowedHosts": ["mcp.example.com", "127.0.0.1", "localhost"],
+  "allowedOrigins": [],
+  "stateDir": "/home/mcp/.local/state/shell-mcp",
+  "auth": { "mode": "token", "tokenEnv": "SHELL_MCP_TOKEN", "principal": "owner" },
+  "targets": {
+    "dev-linux": {
+      "description": "Remote development workspace",
+      "sshAlias": "dev-linux",
+      "sshConfig": "/home/mcp/.ssh/config",
+      "principals": ["owner"],
+      "workspaces": { "sample": "/srv/projects/sample" }
+    }
+  }
+}

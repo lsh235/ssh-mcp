@@ -6,6 +6,12 @@ VS Code의 Copilot이 원격 프로젝트를 읽고 수정하고, 같은 SSH 셸
 
 v0.2에는 실행 중 stdin 입력/EOF, 명령 완료 대기, 원격 코드 검색, 명령 이력, 종료된 세션의 새 세대 열기를 추가했습니다. [추가 기능 사용법](docs/V02_USAGE.md)과 [v0.2 검증 결과](docs/V02_STATUS.md)를 확인하세요.
 
+## AI에게 설치·연결을 맡기기
+
+AI에게 **[AGENTS.md](AGENTS.md)와 [AI 설치·사용 안내](docs/AI_SETUP.md)를 읽고 진행하도록 요청**하세요. 안내에는 필요한 환경 값, B 서버 설치, SSH 확인, VS Code 설정, 첫 MCP 호출, 오류 처리, 다른 AI에 전달할 시작 프롬프트가 있습니다. Copilot용 진입점은 [.github/copilot-instructions.md](.github/copilot-instructions.md)입니다.
+
+원격 토큰 설정은 [서버 템플릿](examples/config.remote-token.example.json)과 [VS Code Local harness 템플릿](examples/vscode-remote.mcp.json)을 사용합니다. 주소·경로는 실제 값으로 바꾸고, 토큰은 비밀번호 입력 창에 제공합니다. 문서만 읽으면 연결이 완료되는 것은 아니므로 실제 도구 호출까지 확인합니다.
+
 ## 시작
 
 ```bash

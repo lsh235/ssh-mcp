@@ -1,0 +1,24 @@
+{
+  "status": "PASS",
+  "scope": "documentation and templates; compiled local HTTP MCP with isolated real SSH fixture",
+  "files": [
+    "AGENTS.md",
+    ".github/copilot-instructions.md",
+    "docs/AI_SETUP.md",
+    "README.md"
+  ],
+  "localLinks": 35,
+  "bashSyntaxBlocks": 6,
+  "remoteServerConfigSchema": "PASS",
+  "vscodeTemplateJSON": "PASS",
+  "documentJSONToolExamples": 6,
+  "toolInputSchemas": "PASS",
+  "discoveredTools": 19,
+  "mcpToolCalls": 19,
+  "persistentShellExample": "PASS",
+  "versionCheckedPatchExample": "PASS",
+  "actualCopilotClient": "NOT RUN",
+  "publicHTTPS": "NOT RUN",
+  "externalOAuth": "NOT RUN",
+  "build": "NOT REQUIRED: documentation and example templates only; current compiled server used"
+}
