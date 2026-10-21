@@ -174,7 +174,7 @@ background 프로세스가 계속 파일에 쓰는 경우 전경 명령 완료�
 | `get_command` | commandId 또는 sessionId + clientRequestId | 접수 여부, 실행 상태, 완료 정보 |
 | `read_output` | commandId, stream, cursor, maxBytes | 출력 페이지, nextCursor, truncated, outputComplete |
 | `cancel_command` | commandId | 취소 요청 상태, 프로세스 종료 확인, 셸 손실 여부 |
-| `list_files` | sessionId, 상대 경로, cursor | 제한된 디렉터리 목록 |
+| `list_files` | sessionId, 상대 경로, cursor | 100개 단위 이름순 목록, type/size/mtime/permissions, bounded scan의 incomplete 표기; symlink는 lstat하고 따라가지 않음 |
 | `read_file` | sessionId, 상대 경로, offset, maxBytes | 내용, 파일 버전 해시, 인코딩 |
 | `apply_patch` | sessionId, patch, expectedVersions, clientRequestId | 변경 파일·새 해시·충돌·부분 적용 여부 |
 | `git_status` | sessionId | 변경 경로와 저장소 상태 |

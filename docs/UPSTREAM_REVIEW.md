@@ -1,5 +1,13 @@
 # 오픈소스 조사 근거
 
+## 2026-10-22 v0.7: bounded 파일 목록 재조사
+
+`tufantunc/ssh-mcp` main `5c5b8476492cda568fca779b307ff8a2ca0bbbb7`의 [README](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/README.md)와 [CHANGELOG](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/CHANGELOG.md)를 웹에서 다시 확인했습니다. README는 제한된 `sftp-list`와 모델 context를 거치지 않는 file streaming을 설명합니다. 이 프로젝트는 현재 B의 로컬 transfer path가 A의 사용자 workspace를 가리키지 않으므로 streaming 전송을 보류하고, workspace 내부 bounded listing만 채택했습니다. OpenBSD `sftp ls -l`의 상세 목록을 참고해 metadata를 추가하되 [stat(2)](https://man.openbsd.org/stat.2)의 `lstat` 의미대로 symlink 자체만 봅니다.
+
+같은 upstream CHANGELOG는 2.20.0에서 command classifier가 `make`, `ssh host cmd`, privilege broker 등 실행 전달 경로를 놓쳤던 문제와 수정을 기록합니다. 이를 포함한 반복 수정 이력 때문에 문자열 분류기를 권한 경계로 포팅하지 않습니다. VS Code의 [MCP tool confirmation 문서](https://code.visualstudio.com/api/extension-guides/ai/mcp)는 쓰기 도구 확인 UI를 설명하지만, 실제 사용자 Copilot에서 확인하지 않았으므로 별도 elicitation 승인 기능도 아직 추가하지 않았습니다.
+
+Shell MCP v0.7은 upstream 코드를 복사하지 않았으며, Python SSH helper에 10,000 항목/8 MiB 수집 상한, cursor page, `incomplete` 사유, `lstat` 기반 metadata를 독립 구현했습니다. 자세한 시험 경계는 [V07_STATUS](V07_STATUS.md)에 기록했습니다.
+
 ## 2026-10-22 추가 조사: tufantunc/ssh-mcp
 
 이번 라운드에서 [tufantunc/ssh-mcp](https://github.com/tufantunc/ssh-mcp)의 기본 브랜치와 웹 문서를 확인했습니다. 기준 리비전은 `5c5b8476492cda568fca779b307ff8a2ca0bbbb7`입니다. README, SECURITY, 세션 관리자, SSH 연결 어댑터, HTTP transport와 감사 저장소를 살펴봤습니다. 원본을 이 저장소에 설치하거나 실행하지 않았고, 특정 구현 파일을 복사하지 않았습니다.

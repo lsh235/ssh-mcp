@@ -1,6 +1,6 @@
 # 설치·연결·운영
 
-Shell MCP 0.6.0은 원격 MCP 설치 PC(B)에서 실행합니다. B의 SSH 인증정보로 작업 대상 PC(C)에 접속합니다. Tabby 앱이나 기존 Tabby MCP 플러그인을 실행할 필요는 없습니다. 입력·검색·이력·세션 도구는 [v0.2 사용법](V02_USAGE.md), 추가 로그인은 [LOGIN_SETUP](LOGIN_SETUP.md), 브라우저 상태 화면은 [VSCODE_BROWSER](VSCODE_BROWSER.md), 업스트림 기능 이식 흐름은 [UPSTREAM_MIGRATION](UPSTREAM_MIGRATION.md)을 참고하세요.
+Shell MCP 0.7.0은 원격 MCP 설치 PC(B)에서 실행합니다. B의 SSH 인증정보로 작업 대상 PC(C)에 접속합니다. Tabby 앱이나 기존 Tabby MCP 플러그인을 실행할 필요는 없습니다. 입력·검색·이력·세션 도구는 [v0.2 사용법](V02_USAGE.md), 추가 로그인은 [LOGIN_SETUP](LOGIN_SETUP.md), 브라우저 상태 화면은 [VSCODE_BROWSER](VSCODE_BROWSER.md), 업스트림 기능 이식 흐름은 [UPSTREAM_MIGRATION](UPSTREAM_MIGRATION.md)을 참고하세요.
 
 ## 준비
 
@@ -101,7 +101,7 @@ npm run audit:verify -- /absolute/path/to/state/audit.jsonl
 
 ## 파일과 권한의 한계
 
-파일 도구는 workspace 상대 경로만 받고 심볼릭 링크를 거부합니다. 패치에는 읽을 때 받은 해시를 제공하며, 새 파일의 버전은 null입니다. 첫 버전은 1 MiB 이하 UTF-8 일반 파일, 기존 부모 디렉터리, unified diff를 지원합니다. rename·바이너리·권한 변경은 지원하지 않습니다.
+파일 도구는 workspace 상대 경로만 받습니다. `list_files`는 이름순으로 100개씩 페이지를 반환하고 파일 형식·일반 파일 크기·수정 시각(epoch milliseconds)·권한 비트를 표시합니다. symlink는 `lstat`으로 링크 자체만 분류하고 따라가지 않습니다. 대형 디렉터리는 최대 10,000개 항목 또는 이름 데이터 8 MiB까지만 훑으며, `incomplete`와 `limitations`가 있으면 그 범위의 결과만 사용합니다. 페이지는 파일시스템 스냅샷이 아닙니다. `read_file`은 1 MiB 이하 UTF-8 일반 파일이며, 패치에는 읽을 때 받은 해시를 제공하고 새 파일의 버전은 null입니다. rename·바이너리 수정·권한 변경은 지원하지 않습니다.
 
 여러 파일 패치는 전체 사전 검사 후 파일별 임시 쓰기/rename을 수행합니다. 파일 시스템 전체 트랜잭션이나 외부 편집자와의 완전한 CAS는 제공하지 않습니다. 오류 시 `partial_apply`를 확인하고 다시 읽습니다. 신뢰된 전용 worktree에서 사용합니다.
 

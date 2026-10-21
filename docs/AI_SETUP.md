@@ -157,7 +157,7 @@ VS Code에서 `MCP: Add Server`의 HTTP 방식으로 등록할 수도 있습니�
 
 stderr도 별도의 cursor=0부터 조회합니다. 실행이 끝났고 nextCursor가 더 진행하지 않으면 해당 스트림 읽기를 마칩니다. outputComplete=false인 원인(진행 중·잘림·불확실성)을 구분합니다.
 
-4. `list_files`/`search_files`/`read_file`로 프로젝트 구조와 테스트 명령을 파악합니다. 사용자 작업이 코드 변경을 포함하면 `read_file` 반환의 `version`을 사용해 다음 형태로 패치합니다. 아래 대문자 값은 템플릿입니다.
+4. `list_files`/`search_files`/`read_file`로 프로젝트 구조와 테스트 명령을 파악합니다. `list_files`는 항목별 type, sizeBytes, modifiedAt, permissions를 반환합니다. `incomplete=true`이면 제한으로 일부 디렉터리만 훑은 결과이므로 전체라고 추정하지 않습니다. symlink는 따라가지 않습니다. 사용자 작업이 코드 변경을 포함하면 `read_file` 반환의 `version`을 사용해 다음 형태로 패치합니다. 아래 대문자 값은 템플릿입니다.
 
 ```json
 {"tool":"apply_patch","arguments":{"sessionId":"SESSION_ID","patch":"--- a/src/example.py\n+++ b/src/example.py\n@@ -1 +1 @@\n-old\n+new\n","expectedVersions":{"src/example.py":"SHA256_FROM_READ_FILE"},"clientRequestId":"task-patch-001"}}

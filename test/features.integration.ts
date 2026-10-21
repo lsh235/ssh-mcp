@@ -98,6 +98,41 @@ test('bounded literal search and stable history pages include scope checks',{tim
   }finally{await service.shutdown();await f.close();}
 });
 
+test('workspace listing returns bounded lstat metadata without following symlinks',{timeout:30000},async()=>{
+  const f=await fixture(),service=new ShellService(f.config);
+  try{
+    mkdirSync(join(f.root,'directory'));
+    writeFileSync(join(f.root,'small.txt'),'hello');
+    symlinkSync('/etc/passwd',join(f.root,'outside-link'));
+    const s=await service.open('owner','test','project','list-metadata');
+    const page=await service.listFiles('owner',s.id,'.',0) as {entries:{name:string;type:string;sizeBytes:number|null;modifiedAt:number;permissions:string}[];nextCursor:number|null;incomplete:boolean;limitations:string[];snapshot:boolean};
+    const file=page.entries.find(entry=>entry.name==='small.txt')!;
+    const directory=page.entries.find(entry=>entry.name==='directory')!;
+    const link=page.entries.find(entry=>entry.name==='outside-link')!;
+    assert.equal(file.type,'file');assert.equal(file.sizeBytes,5);assert.match(file.permissions,/^[0-7]{4}$/);assert.ok(file.modifiedAt>0);
+    assert.equal(directory.type,'directory');assert.equal(directory.sizeBytes,null);
+    assert.equal(link.type,'symlink');assert.equal(link.sizeBytes,null);
+    assert.equal(page.incomplete,false);assert.deepEqual(page.limitations,[]);assert.equal(page.snapshot,false);
+    await assert.rejects(service.listFiles('owner',s.id,'small.txt'),{code:'INVALID_DIRECTORY'});
+    await assert.rejects(service.listFiles('owner',s.id,'../'),{code:'INVALID_PATH'});
+  }finally{await service.shutdown();await f.close();}
+});
+
+test('workspace listing stops after the configured bounded scan and marks partial results',{timeout:60000},async()=>{
+  const f=await fixture(),service=new ShellService(f.config);
+  try{
+    const create=`import os\nroot=${JSON.stringify(f.root)}\nfor i in range(10005): open(os.path.join(root, 'entry-%05d'%i), 'w').close()`;
+    const {execFileSync}=await import('node:child_process');
+    execFileSync('python3',['-c',create]);
+    const s=await service.open('owner','test','project','list-limit');
+    const first=await service.listFiles('owner',s.id,'.',0) as {entries:{name:string}[];nextCursor:number|null;incomplete:boolean;limitations:string[];scannedEntries:number};
+    assert.equal(first.entries.length,100);assert.equal(first.nextCursor,100);assert.equal(first.incomplete,true);
+    assert.ok(first.limitations.includes('entry_limit'));assert.equal(first.scannedEntries,10000);
+    const last=await service.listFiles('owner',s.id,'.',9900) as typeof first;
+    assert.equal(last.entries.length,100);assert.equal(last.nextCursor,null);assert.equal(last.incomplete,true);
+  }finally{await service.shutdown();await f.close();}
+});
+
 test('lost input acknowledgement never automatically publishes a duplicate',{timeout:30000},async()=>{
   const f=await fixture(),service=new ShellService(f.config);
   try{

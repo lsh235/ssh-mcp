@@ -1,6 +1,9 @@
 """One-shot helper over an authenticated SSH channel, never a listening service."""
 import base64, hashlib, json, os, pathlib, signal, stat, sys, tempfile, time
 
+MAX_DIRECTORY_ENTRIES = 10000
+MAX_DIRECTORY_NAME_BYTES = 8 * 1024 * 1024
+
 class Failure(Exception):
     def __init__(self, code, message):
         self.code, self.message = code, message
@@ -183,10 +186,38 @@ def main(a):
                 'incomplete':bool(reasons), 'limitations':sorted(reasons), 'snapshot':False}
     if op == 'list':
         path = path_in(root, a.get('path', '.'))
-        names = sorted(path.iterdir(), key=lambda p:p.name)
+        if not path.is_dir(): fail('INVALID_DIRECTORY', 'Expected a directory inside the workspace')
+        names, name_bytes, limitations = [], 0, set()
+        with os.scandir(path) as listing:
+            for entry in listing:
+                if len(names) >= MAX_DIRECTORY_ENTRIES:
+                    limitations.add('entry_limit'); break
+                encoded = os.fsencode(entry.name)
+                if name_bytes + len(encoded) > MAX_DIRECTORY_NAME_BYTES:
+                    limitations.add('name_bytes_limit'); break
+                name_bytes += len(encoded)
+                names.append(entry.name)
+        names.sort()
         offset, maximum = a.get('offset', 0), a.get('maximum', 100)
         page = names[offset:offset+maximum]
-        return {'entries': [{'name':p.name,'type':'symlink' if p.is_symlink() else 'directory' if p.is_dir() else 'file'} for p in page], 'nextCursor':offset+len(page) if offset+len(page)<len(names) else None}
+        entries = []
+        for name in page:
+            try:
+                info = os.lstat(path / name)
+            except FileNotFoundError:
+                limitations.add('entry_changed')
+                continue
+            mode = info.st_mode
+            kind = ('symlink' if stat.S_ISLNK(mode) else 'directory' if stat.S_ISDIR(mode)
+                    else 'file' if stat.S_ISREG(mode) else 'other')
+            entries.append({'name':name,'type':kind,
+                            'sizeBytes':info.st_size if stat.S_ISREG(mode) else None,
+                            'modifiedAt':int(info.st_mtime * 1000),
+                            'permissions':format(stat.S_IMODE(mode), '04o')})
+        next_offset = offset + len(page)
+        return {'entries':entries, 'nextCursor':next_offset if next_offset<len(names) else None,
+                'scannedEntries':len(names), 'incomplete':bool(limitations),
+                'limitations':sorted(limitations), 'snapshot':False}
     if op == 'read':
         path = path_in(root, a['path'])
         data = read_regular(path)
