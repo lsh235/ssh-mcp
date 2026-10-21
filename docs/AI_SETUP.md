@@ -16,6 +16,8 @@ C: 실제 프로젝트 PC / 기존 SSH 서버와 프로젝트
 
 SSH 인증 성공 뒤 추가 로그인 화면이 있다면 [LOGIN_SETUP](LOGIN_SETUP.md)의 대상별 postLogin 설정을 먼저 준비합니다. 값은 B의 비공개 파일·환경변수에 두고, 실제 안내 문구와 최종 셸 프롬프트를 설정합니다. 아래의 `ssh ... command` 사전 점검은 게이트에 막힐 수 있으므로 해당 대상은 postLogin 설정 후 실제 open_session과 읽기 도구로 확인합니다.
 
+현재 대화의 SSH 작업을 브라우저에서 보고 싶다면 [VSCODE_BROWSER](VSCODE_BROWSER.md)를 따릅니다. create_session_view에 이 대화의 SSH 세션 ID만 전달하고 반환된 URL을 VS Code Integrated Browser 또는 일반 브라우저에서 엽니다. 실제 토큰은 사용자가 화면에 직접 입력합니다.
+
 | 확인할 값 | 확인 방법 / 예시 |
 | --- | --- |
 | 현재 실행 위치 | 현재 PC가 A/B/C 중 어디인지, 사용 가능한 원격 실행 경로 확인 |
@@ -126,7 +128,7 @@ VS Code에서 `MCP: Add Server`의 HTTP 방식으로 등록할 수도 있습니�
 
 아래는 HTTP 요청 본문이 아니라 **MCP 도구 이름과 arguments**입니다. 클라이언트가 표시하는 도구 접두사는 다를 수 있습니다. 호출 결과는 `structuredContent.result` 또는 JSON text의 `result`에 있으며 오류는 `isError`와 `error.code`로 확인합니다. ID·해시·커서는 실제 반환값을 사용합니다. 예시의 clientRequestId도 설치 시도별 고유 값(예: UUID 접두사)으로 바꿉니다. 같은 작업의 응답 유실을 확인할 때만 기존 ID를 그대로 재사용합니다.
 
-1. 도구 목록을 발견하고 `list_targets({})`를 호출합니다. 현재 버전은 19개 도구입니다.
+1. 도구 목록을 발견하고 `list_targets({})`를 호출합니다. 현재 버전은 20개 도구입니다.
 2. `list_sessions({})`에서 같은 대상의 사용 가능한 소유 세션을 확인합니다. 새 세션이 필요할 때 아래를 호출합니다.
 
 ```json

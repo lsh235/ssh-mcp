@@ -7,6 +7,7 @@ import { Authenticator } from './auth.js';
 import { ShellService } from './service.js';
 import { createTools } from './tools.js';
 import { Fault } from './core.js';
+import { sessionViewer } from './viewer.js';
 
 export function createApp(config:Config) {
   const auth=new Authenticator(config), service=new ShellService(config), app=express();
@@ -20,10 +21,13 @@ export function createApp(config:Config) {
   app.use((req,res,next)=>{
     if(!config.allowedHosts.includes(req.hostname)) {res.status(403).json({error:'HOST_FORBIDDEN'});return;}
     const origin=req.get('origin');
-    if(origin&&!config.allowedOrigins.includes(origin)){res.status(403).json({error:'ORIGIN_FORBIDDEN'});return;}
+    const viewerPath=req.path==='/sessions'||req.path.startsWith('/viewer-api/')||req.path.startsWith('/session-assets/');
+    const viewerOrigin=viewerPath&&origin===new URL(config.publicUrl).origin;
+    if(origin&&!viewerOrigin&&!config.allowedOrigins.includes(origin)){res.status(403).json({error:'ORIGIN_FORBIDDEN'});return;}
     res.set('Cache-Control','no-store');next();
   });
-  app.get('/health',(_req,res)=>res.json({status:'ok',version:'0.3.0'}));
+  app.use(sessionViewer(auth,service));
+  app.get('/health',(_req,res)=>res.json({status:'ok',version:'0.4.0'}));
   for(const path of ['/.well-known/oauth-protected-resource','/.well-known/oauth-protected-resource/mcp'])app.get(path,(_req,res)=>{
     if(config.auth.mode!=='oauth'){res.sendStatus(404);return;}res.json(auth.metadata());
   });

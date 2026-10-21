@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shell MCP · 세션 보기</title><link rel="stylesheet" href="/session-assets/style.css"><script type="module" src="/session-assets/app.js"></script></head>
+<body>
+<header><a class="brand" href="/sessions">S<span>Shell MCP</span></a><span class="pill">보기 전용</span><button id="logout" hidden>연결 해제</button></header>
+<main>
+  <section id="login" class="welcome">
+    <p class="eyebrow">YOUR REMOTE WORKSPACE</p><h1>작업은 원격에서.<br>진행 상황은 여기에서.</h1>
+    <p class="intro">현재 대화에 연결한 SSH 세션과 실행 결과를 확인하세요.</p>
+    <form id="login-form"><label for="token">MCP 접속 토큰</label><div class="login-row"><input id="token" type="password" autocomplete="off" required placeholder="접속 토큰 입력"><button class="primary">연결</button></div><p class="muted">토큰은 이 페이지를 닫으면 지워집니다. 주소나 브라우저 저장소에 보관하지 않습니다.</p></form>
+    <p id="setup-help" hidden>AI에게 “이번 대화의 SSH 세션으로 create_session_view를 호출하고 보기 링크를 알려줘”라고 요청한 뒤 그 링크를 열어주세요.</p>
+  </section>
+  <section id="monitor" hidden>
+    <div class="page-heading"><div><p class="eyebrow">SESSION MONITOR</p><h1 id="view-label">현재 대화</h1><p class="muted">선택한 SSH 세션의 상태와 최근 명령을 확인합니다.</p></div><div class="refresh-area"><span id="sync">연결 중</span><button id="refresh">새로고침</button></div></div>
+    <div class="workspace"><aside><div class="section-heading"><h2>연결된 서버</h2><span id="session-count" class="count">0</span></div><div id="session-list"></div></aside>
+    <div class="detail"><section class="session-summary"><div class="section-heading"><h2 id="target-name">서버 선택</h2><span id="session-status" class="badge"></span></div><p id="cwd" class="mono muted"></p><div class="facts"><div><span>작업 공간</span><strong id="workspace-name">—</strong></div><div><span>세션 세대</span><strong id="generation">—</strong></div><div><span>세션 ID</span><strong id="session-id" class="mono">—</strong></div></div></section>
+    <section class="commands"><div class="section-heading"><h2>최근 실행</h2><span class="muted">최대 50개 · 최신순</span></div><div id="command-list" class="command-list"></div></section>
+    <section class="output"><div class="section-heading"><h2>실행 결과</h2><button id="more-output" disabled>더 읽기</button></div><p id="command-info" class="mono muted">명령을 선택하면 결과를 표시합니다.</p><div class="streams"><div><h3>표준 출력 <span id="stdout-position"></span></h3><pre id="stdout" tabindex="0"></pre></div><div><h3>오류 출력 <span id="stderr-position"></span></h3><pre id="stderr" tabindex="0"></pre></div></div><p id="output-note" class="muted"></p></section></div></div>
+  </section><p id="error" class="error" role="alert" hidden></p>
+</main><footer>Shell MCP <span>·</span> 원격 세션의 상태를 확인하는 공간</footer>
+</body></html>

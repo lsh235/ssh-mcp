@@ -1,0 +1,5 @@
+
+> shell-mcp@0.4.0 smoke
+> node scripts/smoke.mjs
+
+PASS: compiled HTTP server health, authenticated MCP discovery and tool invocation (20 tools)

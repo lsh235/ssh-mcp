@@ -43,6 +43,40 @@ export class ShellService {
     r.touched = performance.now(); return {s,r};
   }
   listSessions(owner: string) { return this.store.list('session',owner).filter(s => this.config.targets[s.targetId as string]?.principals.includes(owner)); }
+  createSessionView(owner:string,sessionIds:string[],label:string,key:string){
+    const ids=[...new Set(sessionIds)];ids.forEach(id=>this.session(owner,id));
+    const scope='session-view',digest=hash(JSON.stringify([ids,label]));
+    let id=this.store.request(owner,scope,key,digest);
+    if(!id){
+      assert(this.store.list('view',owner).length<1000,'RESOURCE_LIMIT','Maximum saved session views reached');
+      id=uid('v');this.store.put('view',{id,owner,state:'active',updatedAt:Date.now(),sessionIds:ids,label});
+      this.store.remember(owner,scope,key,digest,id);
+    }
+    return {viewId:id,url:new URL('/sessions',this.config.publicUrl).href+'#'+id,sessionIds:ids,label};
+  }
+  sessionView(owner:string,id:string){
+    const view=this.store.get('view',id,owner);
+    const sessions=(view.sessionIds as string[]).map(sessionId=>{
+      const s=this.session(owner,sessionId);
+      return {sessionId:s.id,targetId:s.targetId,workspaceId:s.workspaceId,generation:s.generation,
+        cwd:s.cwd,state:s.state,updatedAt:s.updatedAt,reason:s.reason};
+    });
+    return {viewId:id,label:view.label,sessions};
+  }
+  private viewSession(owner:string,viewId:string,sessionId:string){
+    const view=this.sessionView(owner,viewId);
+    assert(view.sessions.some(s=>s.sessionId===sessionId),'NOT_FOUND','Session is not included in this view');
+  }
+  viewCommands(owner:string,viewId:string,sessionId:string){
+    this.viewSession(owner,viewId,sessionId);
+    return this.store.recentCommands(owner,sessionId).map(c=>({commandId:c.id,displayName:c.displayName,state:c.state,exitCode:c.exitCode,
+      startedAt:c.startedAt,endedAt:c.endedAt,elapsedMs:c.elapsedMs,stdoutBytes:c.stdoutBytes,stderrBytes:c.stderrBytes,
+      truncated:c.truncated,outputComplete:c.outputComplete,inputMode:c.inputMode,stdinClosed:c.stdinClosed,reason:c.reason}));
+  }
+  viewOutput(owner:string,viewId:string,commandId:string,stream:'stdout'|'stderr',cursor:number){
+    const c=this.command(owner,commandId);this.viewSession(owner,viewId,c.sessionId);
+    return this.readOutput(owner,commandId,stream,cursor);
+  }
   async open(owner: string, targetId: string, workspaceId: string, key: string, scope='open', generation=1, previousSessionId?:string) {
     assert(!this.stopping,'SERVER_STOPPING','Server is stopping');
     const t = this.target(owner,targetId), root = t.workspaces[workspaceId]; assert(root,'INVALID_WORKSPACE','Unknown workspace');
@@ -135,16 +169,18 @@ export class ShellService {
       this.store.put('input',input);this.audit('input',owner,inputId,input.state);return input;
     }finally{r.inputBusy=false;}
   }
-  async run(owner: string, id: string, command: string, key: string, waitMs=1000, deadlineMs=120000,inputMode:'closed'|'pipe'='closed') {
+  async run(owner: string, id: string, command: string, key: string, waitMs=1000, deadlineMs=120000,inputMode:'closed'|'pipe'='closed',displayName?:string) {
     assert(!this.stopping,'SERVER_STOPPING','Server is stopping');
     // Keep v0.1 request hashes for the unchanged closed-input default.
-    const s = this.session(owner,id), digest = hash(JSON.stringify(inputMode==='closed'?[command,deadlineMs]:[command,deadlineMs,inputMode]));
+    const payload:unknown[]=inputMode==='closed'?[command,deadlineMs]:[command,deadlineMs,inputMode];
+    if(displayName!==undefined)payload.push({displayName});
+    const s = this.session(owner,id), digest = hash(JSON.stringify(payload));
     const prior = this.store.request(owner,id,key,digest); if (prior) return this.command(owner,prior);
     const {r} = this.runtime(owner,id); assert(!r.busy,'SESSION_BUSY','A command or mutation is already running');
     assert(deadlineMs<=this.config.limits.maxCommandMs,'INVALID_DEADLINE','Deadline exceeds server policy');
     assert(this.store.list('command').length<10000,'RESOURCE_LIMIT','Command history limit reached; expire old history before submitting more');
     const commandId=uid('c');
-    const c: Command = {id:commandId,commandId,owner,sessionId:id,state:'accepted',generation:s.generation,exitCode:null,stdoutBytes:0,stderrBytes:0,startedAt:Date.now(),deadlineMs,truncated:false,outputComplete:false,cwd:s.cwd,updatedAt:Date.now(),inputMode,inputSequence:0,inputBytes:0,stdinClosed:inputMode==='closed'};
+    const c: Command = {id:commandId,commandId,owner,sessionId:id,state:'accepted',generation:s.generation,exitCode:null,stdoutBytes:0,stderrBytes:0,startedAt:Date.now(),deadlineMs,truncated:false,outputComplete:false,cwd:s.cwd,updatedAt:Date.now(),inputMode,inputSequence:0,inputBytes:0,stdinClosed:inputMode==='closed',...(displayName!==undefined?{displayName}:{})};
     this.store.put('command',c); this.store.remember(owner,id,key,digest,c.id);
     for (const stream of ['stdout','stderr']) writeFileSync(this.outputPath(c.id,stream),'',{mode:0o600});
     r.busy=true; r.commandId=c.id; this.store.put('session',{...s,state:'busy'});

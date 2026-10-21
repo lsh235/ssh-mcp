@@ -1,0 +1,11 @@
+{
+  "commit": "09470b070838af45a9a8c9dcf9f0d02b2406ebf6",
+  "sha256": {
+    "src/server.ts": "71743e6422760d68d444bb65c279d4edacb8c6f3f4fe604e594d29f4d3bedf4b",
+    "src/service.ts": "b317a1e70f0e76baee8870a8aa8c1815a6e7bde4798b98ef60dda65131e17b11",
+    "src/tools.ts": "de0b817db4e74a432fb396644beb79d7b7c9fcd0a9627580222d9d2333de0b18",
+    "src/storage.ts": "32b76c0897d7631b6fa110bd7eb7ca6c245af19a15ddb7eca3b24583424ff39b",
+    "package.json": "e558b1b079ac9a7717968ff953c711a3ee89415bf48ce6ca7ad82f1b00891e26",
+    "package-lock.json": "15a9e3275b1dcfce4c7729c84292e76575b27cd4b5eec1ca4854d5da203065b1"
+  }
+}

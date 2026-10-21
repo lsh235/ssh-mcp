@@ -78,7 +78,7 @@ test('real HTTP MCP client: authentication, remote commands and reconnect withou
     assert.equal(badHost,403);
     const legacy=await fetch(url,{method:'POST',headers:{Authorization:'Bearer '+process.env.SHELL_MCP_TEST_TOKEN,'Content-Type':'application/json',Accept:'application/json, text/event-stream','MCP-Protocol-Version':'2025-11-25'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'legacy-probe',version:'1.0'}}})});
     assert.equal(legacy.status,200);assert.match(await legacy.text(),/2025-11-25/);
-    client=await connect();assert.equal((await client.listTools()).tools.length,19);
+    client=await connect();assert.equal((await client.listTools()).tools.length,20);
     const call=async(name:string,args:Record<string,unknown>)=>{
       const r=await client!.callTool({name,arguments:args});assert.ok(!r.isError,JSON.stringify(r));return (r.structuredContent as {result:Record<string,unknown>}).result;
     };

@@ -1,0 +1,234 @@
+
+> shell-mcp@0.4.0 check
+> npm run build && npm test && npm run test:ssh && npm run test:v02 && npm run test:login && npm run test:browser
+
+
+> shell-mcp@0.4.0 build
+> tsc && node scripts/copy-assets.mjs
+
+
+> shell-mcp@0.4.0 test
+> tsx --test --test-concurrency=1 test/*.test.ts
+
+TAP version 13
+# Subtest: OAuth validates audience, expiry, subject and scopes against signed tokens
+ok 1 - OAuth validates audience, expiry, subject and scopes against signed tokens
+  ---
+  duration_ms: 12.21654
+  type: 'test'
+  ...
+# Subtest: durable admission conflicts and restart recovery never replay uncertain jobs
+ok 2 - durable admission conflicts and restart recovery never replay uncertain jobs
+  ---
+  duration_ms: 21.753103
+  type: 'test'
+  ...
+# Subtest: config rejects non-loopback listeners and unsafe target aliases
+ok 3 - config rejects non-loopback listeners and unsafe target aliases
+  ---
+  duration_ms: 1.10129
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 161.145475
+
+> shell-mcp@0.4.0 test:ssh
+> tsx --test --test-concurrency=1 test/ssh.integration.ts
+
+TAP version 13
+# Subtest: real OpenSSH: persistent shell, patch/test loop, output, deduplication, failures and isolation
+ok 1 - real OpenSSH: persistent shell, patch/test loop, output, deduplication, failures and isolation
+  ---
+  duration_ms: 3711.652531
+  type: 'test'
+  ...
+# Subtest: multi-file patch reports a real partial filesystem failure
+ok 2 - multi-file patch reports a real partial filesystem failure
+  ---
+  duration_ms: 743.10406
+  type: 'test'
+  ...
+# Subtest: real HTTP MCP client: authentication, remote commands and reconnect without replay
+ok 3 - real HTTP MCP client: authentication, remote commands and reconnect without replay
+  ---
+  duration_ms: 2953.105015
+  type: 'test'
+  ...
+# Subtest: SSH transport loss is uncertain and host key checking cannot be bypassed
+ok 4 - SSH transport loss is uncertain and host key checking cannot be bypassed
+  ---
+  duration_ms: 2085.061347
+  type: 'test'
+  ...
+# Subtest: remote deadline and bounded output are explicit
+ok 5 - remote deadline and bounded output are explicit
+  ---
+  duration_ms: 1388.764621
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 11206.242581
+
+> shell-mcp@0.4.0 test:v02
+> tsx --test --test-concurrency=1 test/features.integration.ts
+
+TAP version 13
+# Subtest: pipe stdin: progressive input, duplicate safety, EOF and persistent Bash state
+ok 1 - pipe stdin: progressive input, duplicate safety, EOF and persistent Bash state
+  ---
+  duration_ms: 3588.514327
+  type: 'test'
+  ...
+# Subtest: worker exit in pipe mode does not leave its stdin feeder running
+ok 2 - worker exit in pipe mode does not leave its stdin feeder running
+  ---
+  duration_ms: 1249.762965
+  type: 'test'
+  ...
+# Subtest: input caps and cancel/reopen create a fresh generation without replay
+ok 3 - input caps and cancel/reopen create a fresh generation without replay
+  ---
+  duration_ms: 1233.832579
+  type: 'test'
+  ...
+# Subtest: bounded literal search and stable history pages include scope checks
+ok 4 - bounded literal search and stable history pages include scope checks
+  ---
+  duration_ms: 961.181658
+  type: 'test'
+  ...
+# Subtest: lost input acknowledgement never automatically publishes a duplicate
+ok 5 - lost input acknowledgement never automatically publishes a duplicate
+  ---
+  duration_ms: 810.197093
+  type: 'test'
+  ...
+# Subtest: HTTP MCP exposes and executes all five new tools
+ok 6 - HTTP MCP exposes and executes all five new tools
+  ---
+  duration_ms: 1303.994028
+  type: 'test'
+  ...
+1..6
+# tests 6
+# suites 0
+# pass 6
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 9424.865593
+
+> shell-mcp@0.4.0 test:login
+> tsx --test --test-concurrency=1 test/login.integration.ts
+
+TAP version 13
+# Subtest: post-SSH gate: two prompt inputs, same-channel files/git/commands, stdin and persistent state
+ok 1 - post-SSH gate: two prompt inputs, same-channel files/git/commands, stdin and persistent state
+  ---
+  duration_ms: 2344.306194
+  type: 'test'
+  ...
+# Subtest: unmatched gate prompt times out without sending later input or exposing banners
+ok 2 - unmatched gate prompt times out without sending later input or exposing banners
+  ---
+  duration_ms: 610.929199
+  type: 'test'
+  ...
+# Subtest: secret references reject inline values, missing env, public/symlink/multiline files and controls
+ok 3 - secret references reject inline values, missing env, public/symlink/multiline files and controls
+  ---
+  duration_ms: 313.338144
+  type: 'test'
+  ...
+# Subtest: actual HTTP MCP gate cancellation confirms termination; reopen logs in again
+ok 4 - actual HTTP MCP gate cancellation confirms termination; reopen logs in again
+  ---
+  duration_ms: 1427.641443
+  type: 'test'
+  ...
+# Subtest: wrong gate value fails closed and cannot start helpers or leak echoed values
+ok 5 - wrong gate value fails closed and cannot start helpers or leak echoed values
+  ---
+  duration_ms: 551.43904
+  type: 'test'
+  ...
+# Subtest: master disconnect makes gate command unknown and terminates its remote worker group
+ok 6 - master disconnect makes gate command unknown and terminates its remote worker group
+  ---
+  duration_ms: 875.511128
+  type: 'test'
+  ...
+# Subtest: gate helper output limits and deadlines remain enforced on the shared channel
+ok 7 - gate helper output limits and deadlines remain enforced on the shared channel
+  ---
+  duration_ms: 995.175836
+  type: 'test'
+  ...
+# Subtest: gate target and ordinary SSH target remain independent in one MCP service
+ok 8 - gate target and ordinary SSH target remain independent in one MCP service
+  ---
+  duration_ms: 1687.485987
+  type: 'test'
+  ...
+# Subtest: login values alone cannot bypass the explicit shell-ready check
+ok 9 - login values alone cannot bypass the explicit shell-ready check
+  ---
+  duration_ms: 703.631409
+  type: 'test'
+  ...
+1..9
+# tests 9
+# suites 0
+# pass 9
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 9797.948159
+
+> shell-mcp@0.4.0 test:browser
+> tsx --test --test-concurrency=1 test/browser.integration.ts
+
+TAP version 13
+# Subtest: browser view: real SSH + MCP creation, bounded history/output, auth and explicit conversation scope
+ok 1 - browser view: real SSH + MCP creation, bounded history/output, auth and explicit conversation scope
+  ---
+  duration_ms: 1431.4919
+  type: 'test'
+  ...
+# Subtest: saved browser views are idempotent, owner scoped, bounded and survive restart
+ok 2 - saved browser views are idempotent, owner scoped, bounded and survive restart
+  ---
+  duration_ms: 698.212836
+  type: 'test'
+  ...
+# Subtest: viewer static assets have strict policies and never embed credentials
+ok 3 - viewer static assets have strict policies and never embed credentials
+  ---
+  duration_ms: 325.948506
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2768.642832

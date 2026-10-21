@@ -1,0 +1,12 @@
+{
+  "status": "PASS",
+  "version": "0.4.0",
+  "runtime": "compiled dist/server.js",
+  "ssh": "actual isolated loopback sshd",
+  "sessionCount": 2,
+  "toolCount": 20,
+  "createSessionViewViaMcp": true,
+  "authenticatedViewApi": true,
+  "syntheticCredentialsOnly": true,
+  "nativeVscodeRuntime": "NOT RUN"
+}

@@ -1,0 +1,58 @@
+{
+  "status": "PASS",
+  "browser": "Google Chrome via isolated Playwright CLI session",
+  "server": "compiled dist/server.js",
+  "data": "synthetic projects and credentials; actual isolated loopback SSH server",
+  "assertions": {
+    "twoSessionsAndSwitching": true,
+    "commandDisplayNameAndExitCode": true,
+    "stdoutAndStderr": true,
+    "liveOutputBefore": "LIVE_START\n",
+    "liveOutputAfter": "LIVE_START\nLIVE_DONE\n",
+    "htmlOutputExecuted": false,
+    "htmlOutputScriptNodes": 0,
+    "tokenInCookies": false,
+    "tokenInLocalStorage": false,
+    "tokenInSessionStorage": false,
+    "logoutClearsDisplayedData": true,
+    "invalidTokenRejected": true,
+    "reloadRequiresLogin": true,
+    "horizontalOverflowDesktopOrMobile": false
+  },
+  "screenshots": [
+    {
+      "path": "output/playwright/session-monitor-desktop.png",
+      "size": [
+        1440,
+        1134
+      ],
+      "visualReview": "PASS"
+    },
+    {
+      "path": "output/playwright/session-monitor-output.png",
+      "size": [
+        1440,
+        1134
+      ],
+      "visualReview": "PASS"
+    },
+    {
+      "path": "output/playwright/session-monitor-mobile.png",
+      "size": [
+        390,
+        1766
+      ],
+      "visualReview": "PASS"
+    },
+    {
+      "path": "output/playwright/session-monitor-dark.png",
+      "size": [
+        1440,
+        1134
+      ],
+      "visualReview": "PASS"
+    }
+  ],
+  "nativeVscodeIntegratedBrowser": "NOT RUN",
+  "externalHTTPSAndOAuth": "NOT RUN"
+}

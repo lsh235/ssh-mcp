@@ -46,6 +46,11 @@ export class Store {
     const page=rows.slice(0,maximum);
     return {commands:page.map(r=>JSON.parse(r.data) as RecordValue),nextCursor:rows.length>maximum?page.at(-1)!.seq:null,lastCursor:page.at(-1)?.seq??cursor};
   }
+  recentCommands(owner:string,sessionId:string,maximum=50):RecordValue[] {
+    const rows=this.db.prepare(`SELECT r.data FROM command_order o JOIN records r ON r.kind='command' AND r.id=o.id
+      WHERE r.owner=? AND json_extract(r.data,'$.sessionId')=? ORDER BY o.seq DESC LIMIT ?`).all(owner,sessionId,maximum) as {data:string}[];
+    return rows.map(row=>JSON.parse(row.data));
+  }
   remember(owner: string, scope: string, key: string, digest: string, result: string) {
     this.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?)').run(owner, scope, key, digest, result);
   }

@@ -1,0 +1,102 @@
+# VS Code Browser로 현재 대화의 SSH 세션 보기 (v0.4)
+
+VS Code Desktop의 **Integrated Browser**에서 이번 대화에 연결한 SSH 세션·명령 상태·출력을 확인할 수 있습니다. 추가 확장을 설치하지 않고 서버가 제공하는 보기 페이지를 엽니다. 표준 웹 페이지이므로 일반 브라우저에서도 사용할 수 있습니다.
+
+이 기능에서 “현재 대화”는 **AI가 현재 대화에서 사용 중인 sessionId를 명시적으로 묶은 보기**입니다. VS Code의 활성 채팅 ID나 대화 원문을 자동 수집하지 않습니다. 같은 인증 사용자에게 속한 세션만 묶을 수 있으며, 보기 링크만 아는 다른 사용자는 접근할 수 없습니다.
+
+## 사용 순서
+
+1. B 서버를 최신 코드로 빌드하고 재시작합니다. 진행 중 SSH 작업을 먼저 확인하며 재시작 후에는 새 세션이 필요합니다. `/mcp`와 함께 `/sessions`, `/session-assets/`, `/viewer-api/`도 기존 HTTPS 프록시를 통해 접근 가능해야 합니다. 제공한 Caddy 예시는 전체 경로를 전달합니다.
+2. MCP 도구를 다시 발견합니다. v0.4는 **20개 도구**이며 `create_session_view`가 추가됐습니다.
+3. AI에게 다음처럼 요청합니다.
+
+```text
+이번 대화에서 사용 중인 SSH 세션들만 create_session_view로 묶어줘.
+보기 링크를 알려주고, 브라우저 도구가 있으면 VS Code Integrated Browser에서 열어줘.
+MCP 접속 토큰은 브라우저 도구 인자나 채팅으로 전달하지 마.
+```
+
+AI가 호출할 도구 인자는 다음 형태입니다. sessionIds에는 실제 반환된 SSH 세션 ID를 사용합니다. clientRequestId는 새 보기마다 고유한 값으로 바꾸고 응답 유실 확인에만 재사용합니다.
+
+```json
+{
+  "tool": "create_session_view",
+  "arguments": {
+    "sessionIds": ["SESSION_ID_BACKEND", "SESSION_ID_FRONTEND"],
+    "label": "이번 대화 · 원격 개발",
+    "clientRequestId": "unique-view-request"
+  }
+}
+```
+
+4. 반환된 `result.url`을 엽니다. 예: `https://mcp.example.com/sessions#v_...`. 주소에는 접속 토큰을 넣지 않습니다.
+5. VS Code 명령 팔레트의 **Browser: Open Integrated Browser**에 URL을 입력할 수도 있습니다. VS Code 웹 버전이나 기능이 없는 버전은 일반 브라우저로 엽니다. 별도 Simple Browser iframe에 넣는 방식은 CSP 때문에 지원하지 않습니다.
+6. 화면의 비밀번호 입력란에 B와 같은 접속 토큰을 **직접** 입력합니다. AI에게 토큰 입력을 맡기거나 채팅에 붙이지 않습니다. 토큰은 페이지 메모리에서만 사용하며 새로고침·페이지 이동·연결 해제 후 다시 입력합니다. OAuth 서버라면 유효한 JWT access token을 입력할 수 있으나 브라우저용 자동 OAuth 로그인은 제공하지 않습니다.
+
+MCP 클라이언트에 설정한 인증 헤더가 브라우저에 자동 전달되지는 않습니다. 이 단계가 별도로 필요합니다. 공용 접속은 HTTPS를 사용하며 실제 publicUrl과 allowedHosts를 맞춥니다. 동일 사이트의 화면 자원·조회 요청은 허용하지만 기존 `/mcp`의 Origin 검사는 그대로 유지합니다.
+
+## 확인할 수 있는 정보
+
+- 이 보기에 포함한 여러 SSH 세션과 각각의 대상·workspace·cwd·세대·연결 상태
+- 선택한 세션의 최근 명령 50개(최신순), 표시 이름·명령 ID·실행 상태·종료 코드
+- 선택한 명령의 stdout/stderr, 현재까지 읽은 바이트, 출력 확정·잘림 여부
+- 약 2초마다 상태와 출력 갱신, 수동 새로고침·출력 더 읽기
+- 밝은/어두운 테마, 작은 화면 레이아웃
+
+화면은 조회만 합니다. 명령 실행·입력 전송·취소·파일 변경은 기존 MCP 도구에서 수행합니다. 화면을 닫거나 연결을 해제해도 SSH 작업은 취소되지 않습니다.
+
+### 명령 표시 이름
+
+명령 원문은 기존처럼 영구 보관하지 않습니다. 알아보기 쉬운 이름이 필요하면 `run_command`의 선택 인자 `displayName`에 **비밀 없는 짧은 명령 또는 설명**을 지정합니다. 이름은 최대 160자이며 저장되어 조회됩니다. 예전 명령이나 이름을 생략한 명령은 ID로 표시합니다. 자동으로 비밀을 지우는 필터가 아니므로 토큰·비밀번호를 이름에 넣지 않습니다.
+
+```json
+{
+  "tool": "run_command",
+  "arguments": {
+    "sessionId": "SESSION_ID_BACKEND",
+    "command": "npm test",
+    "displayName": "npm test · 백엔드 테스트",
+    "clientRequestId": "unique-test-request"
+  }
+}
+```
+
+표시 이름도 요청 내용의 일부입니다. 같은 요청 ID로 이름만 바꾸면 REQUEST_CONFLICT이며, 요청 ID를 새로 발급하면 실제 명령을 다시 실행할 수 있으므로 이름 변경 목적으로 재실행하지 않습니다.
+
+## 대화와 SSH 세션의 관계
+
+하나의 채팅에 여러 SSH 세션을 포함할 수 있습니다. 서버는 채팅 플랫폼의 세션 ID를 받지 않으므로 AI가 현재 대화의 세션만 선택해야 합니다. 보기 label은 설명용이며 권한·사용자 격리의 기준이 아닙니다. 같은 사용자가 소유한 다른 대화의 세션을 명시적으로 추가하면 함께 표시될 수 있습니다.
+
+보기는 SQLite에 남으며 같은 요청 재조회는 같은 URL을 반환합니다. 저장 가능한 보기는 사용자당 최대 1000개입니다. 재시작 뒤에도 과거 보기를 조회할 수 있지만 끊어진 셸을 복구하지는 않습니다. reopen_session은 새 ID이므로 그 ID로 새 보기를 만들거나 기존 세션들과 다시 묶습니다. SSH 세션 상태와 마지막 cwd는 서버가 확인한 기록이며 연결이 끊기면 실제 원격 상태와 다를 수 있습니다.
+
+## 출력과 접근 제어
+
+보기 조회와 출력 조회마다 기존 Bearer 인증, 소유자, 대상 접근 권한, 해당 보기에 세션이 포함되는지를 검사합니다. 보기 ID는 로그인 수단이 아닙니다. API는 GET만 제공하며 생성·실행·취소 API는 브라우저에 노출하지 않습니다.
+
+화면의 조회 전용 동작이 기존 MCP 토큰 자체의 권한을 축소하는 것은 아닙니다. 인증에는 원래 권한을 가진 토큰을 사용하므로 신뢰한 서버의 페이지에서만 입력합니다.
+
+로그인 화면·SSH 키·추가 로그인 비밀·명령 stdin은 화면 데이터에 포함하지 않습니다. 프로그램이 stdout/stderr에 비밀을 출력하면 이 화면에서도 보이므로 출력에 비밀을 남기지 않습니다. 출력과 이름은 HTML로 삽입하지 않고 텍스트로 표시합니다. CSP·no-store·no-referrer를 적용하며 쿠키·localStorage·sessionStorage에 토큰을 저장하지 않습니다.
+
+출력은 스트림당 한 번에 최대 32 KiB씩 바이트 커서로 읽습니다. UTF-8이 페이지 경계에서 나뉘어도 base64 원본과 스트림 디코더로 이어 붙입니다. 화면 메모리가 커지지 않도록 각 스트림에서 최근 표시분만 유지합니다. 전체 기록이 필요하면 기존 MCP read_output의 커서 조회를 사용합니다. 서버 보관 기간이 지나면 출력을 사용할 수 없다고 표시합니다. 최근 50개 이전 명령은 MCP list_commands로 조회합니다.
+
+VS Code의 Share with Agent로 이 페이지를 공유하면 화면의 출력도 AI 컨텍스트가 될 수 있습니다. 공유할 출력 범위를 확인하고 클라이언트의 공유·권한 설정을 따릅니다.
+
+## VS Code 소스 조사 근거
+
+2026-10-21에 `microsoft/vscode`의 리비전 **386203d9b1559d29e9bab2ce9a19800230d13cc6**을 고정해 다음 경로를 확인했습니다. 아래는 해당 범위의 조사 결과이며 전체 VS Code API를 완전히 감사한 결과는 아닙니다.
+
+| 소스 | 확인한 동작 / 설계 반영 |
+| --- | --- |
+| [simple-browser extension](https://github.com/microsoft/vscode/blob/386203d9b1559d29e9bab2ce9a19800230d13cc6/extensions/simple-browser/src/extension.ts#L17) | 내장 확장이 workbench.action.browser.open으로 URL을 전달. 새 확장 없이 기본 명령으로 페이지를 열도록 함 |
+| [native browser view](https://github.com/microsoft/vscode/blob/386203d9b1559d29e9bab2ce9a19800230d13cc6/src/vs/platform/browserView/electron-main/browserView.ts#L157) | Electron WebContentsView를 생성. 일반 웹 페이지를 대상으로 구현 |
+| [web implementation](https://github.com/microsoft/vscode/blob/386203d9b1559d29e9bab2ce9a19800230d13cc6/src/vs/workbench/contrib/browserView/browser/browserView.contribution.ts#L61) | 확인한 웹 구현에서 Integrated Browser 생성이 지원되지 않음. Desktop과 일반 브라우저 경로 구분 |
+| [open browser tool](https://github.com/microsoft/vscode/blob/386203d9b1559d29e9bab2ce9a19800230d13cc6/src/vs/workbench/contrib/browserView/electron-browser/tools/openBrowserTool.ts#L122) | 내부 도구가 호출 컨텍스트의 채팅 세션을 사용. 그 내부 정보를 원격 MCP에 제공한다고 가정하지 않음 |
+| [ChatContext API](https://github.com/microsoft/vscode/blob/386203d9b1559d29e9bab2ce9a19800230d13cc6/src/vscode-dts/vscode.d.ts#L19673) | 확인한 공개 ChatContext.history는 해당 participant 범위. 임의의 기존 채팅 전체를 읽는 설계로 확장하지 않음 |
+
+[공식 Integrated Browser 안내](https://code.visualstudio.com/docs/debugtest/integrated-browser)도 확인했습니다. VS Code 소스는 참고만 했으며 제품 코드를 복사하거나 VS Code를 포크하지 않았습니다. 외부 확장이나 비공개 채팅 DB 접근도 사용하지 않습니다.
+
+## 검증과 한계
+
+`npm run check`는 새 브라우저 API와 기존 SSH·추가 로그인 회귀 시험을 함께 확인합니다. `npm run smoke`는 컴파일된 서버를 실행합니다. Chrome 실브라우저에서 실제 격리 SSH 대상 두 개의 상태·출력, 토큰 입력, 세션 전환, HTML 출력의 텍스트 처리, 저장소 미사용, 데스크톱·모바일·어두운 테마를 확인했습니다.
+
+이 실행 환경에는 VS Code Desktop이 없어 그 본체에서 Integrated Browser를 여는 수용 시험은 NOT RUN입니다. 실제 사용자 PC의 브라우저 도구·외부 HTTPS·OAuth도 별도 확인이 필요합니다. [v0.4 검증 기록](V04_STATUS.md)을 참조하세요.

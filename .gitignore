@@ -6,3 +6,4 @@ config.local.json
 .env
 coverage/
 test-results/private/
+.playwright-cli/

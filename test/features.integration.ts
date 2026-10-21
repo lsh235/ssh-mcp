@@ -114,7 +114,7 @@ test('HTTP MCP exposes and executes all five new tools',{timeout:30000},async()=
   const client=new Client({name:'v02-http',version:'1'},{versionNegotiation:{mode:'auto'}});
   try{
     await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`),{requestInit:{headers:{Authorization:'Bearer '+process.env.SHELL_MCP_TEST_TOKEN}}}));
-    const names=(await client.listTools()).tools.map(t=>t.name);assert.equal(names.length,19);
+    const names=(await client.listTools()).tools.map(t=>t.name);assert.equal(names.length,20);
     for(const name of ['send_input','wait_command','search_files','list_commands','reopen_session'])assert.ok(names.includes(name));
     const call=async(name:string,args:Record<string,unknown>)=>{const response=await client.callTool({name,arguments:args});assert.ok(!response.isError,JSON.stringify(response));return(response.structuredContent as {result:Record<string,unknown>}).result;};
     const s=await call('open_session',{targetId:'test',workspaceId:'project',clientRequestId:'http'});

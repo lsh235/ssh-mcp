@@ -1,0 +1,28 @@
+{
+  "repository": "https://github.com/microsoft/vscode",
+  "revision": "386203d9b1559d29e9bab2ce9a19800230d13cc6",
+  "scope": "targeted source inspection, not an exhaustive public API audit",
+  "sourceCopiedIntoProduct": false,
+  "paths": [
+    {
+      "path": "extensions/simple-browser/src/extension.ts",
+      "sha256": "95954b5bbcd3b315e5d46aed1801f5649fa59b963574b2bb4e9957a18ad2b792"
+    },
+    {
+      "path": "src/vs/platform/browserView/electron-main/browserView.ts",
+      "sha256": "8f428ff5fd6bd0b3e167bb077d951ed4ed4829f7b3762f7bbd4e235a06b05b55"
+    },
+    {
+      "path": "src/vs/workbench/contrib/browserView/browser/browserView.contribution.ts",
+      "sha256": "637700de7381fbe6d5b46eeada7a520e188b1e7dfb98416f027f1ebaae3d50d0"
+    },
+    {
+      "path": "src/vs/workbench/contrib/browserView/electron-browser/tools/openBrowserTool.ts",
+      "sha256": "d2abb81689898a0f215b5d6ec84979e8c709b67583e5ccd7e16ff7ba73c0ceb1"
+    },
+    {
+      "path": "src/vscode-dts/vscode.d.ts",
+      "sha256": "1fc60f012cdde89eceaf26cfe4401e9d0862d9d38062115224fee1564e6ee774"
+    }
+  ]
+}
