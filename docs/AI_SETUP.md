@@ -16,7 +16,7 @@ C: 실제 프로젝트 PC / 기존 SSH 서버와 프로젝트
 
 SSH 인증 성공 뒤 추가 로그인 화면이 있다면 [LOGIN_SETUP](LOGIN_SETUP.md)의 대상별 postLogin 설정을 먼저 준비합니다. 값은 B의 비공개 파일·환경변수에 두고, 실제 안내 문구와 최종 셸 프롬프트를 설정합니다. 아래의 `ssh ... command` 사전 점검은 게이트에 막힐 수 있으므로 해당 대상은 postLogin 설정 후 실제 open_session과 읽기 도구로 확인합니다.
 
-현재 대화의 SSH 작업을 브라우저에서 보고 싶다면 [VSCODE_BROWSER](VSCODE_BROWSER.md)를 따릅니다. create_session_view에 이 대화의 SSH 세션 ID만 전달하고 반환된 URL을 VS Code Integrated Browser 또는 일반 브라우저에서 엽니다. 실제 토큰은 사용자가 화면에 직접 입력합니다.
+현재 대화의 SSH 작업을 브라우저에서 보고 파일을 옮기려면 [VSCODE_BROWSER](VSCODE_BROWSER.md)를 따릅니다. create_session_view에 이 대화의 SSH 세션 ID만 전달하고 반환된 URL을 VS Code Integrated Browser 또는 일반 브라우저에서 엽니다. 사용자가 토큰을 직접 입력하고, 업로드는 파일 선택·버튼을 눌러 명시적으로 시작합니다. 업로드는 원격 새 파일만 만들며 기존 파일은 덮어쓰지 않습니다. 파일 내용은 MCP 도구 응답이나 AI 문맥을 통과하지 않습니다.
 
 | 확인할 값 | 확인 방법 / 예시 |
 | --- | --- |

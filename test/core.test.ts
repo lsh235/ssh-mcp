@@ -20,11 +20,13 @@ test('durable admission conflicts and restart recovery never replay uncertain jo
   let db=new Store(dir);
   db.put('command',{id:'c',owner:'alice',state:'running',updatedAt:Date.now(),exitCode:null});
   db.put('input',{id:'i',owner:'alice',state:'accepted',updatedAt:Date.now(),commandId:'c'});
+  db.put('transfer',{id:'u',owner:'alice',state:'started',updatedAt:Date.now(),direction:'upload'});
   db.remember('alice','s','key','hash','c');
   assert.equal(db.request('alice','s','key','hash'),'c');
   assert.throws(()=>db.request('alice','s','key','other'),/different content/);
   assert.throws(()=>db.get('command','c','bob'),/not owned/);db.close();
-  db=new Store(dir);assert.equal(db.get('command','c','alice').state,'unknown');assert.equal(db.get('input','i','alice').state,'unknown');db.close();rmSync(dir,{recursive:true});
+  db=new Store(dir);assert.equal(db.get('command','c','alice').state,'unknown');assert.equal(db.get('input','i','alice').state,'unknown');
+  assert.equal(db.get('transfer','u','alice').state,'unknown');assert.equal(db.get('transfer','u','alice').reason,'SERVER_RESTART');db.close();rmSync(dir,{recursive:true});
 });
 test('config rejects non-loopback listeners and unsafe target aliases',()=>{
   assert.throws(()=>parseConfig({host:'0.0.0.0',auth:{mode:'token'},targets:{}}));
@@ -36,4 +38,11 @@ test('audit segment size has a bounded default and rejects unsafe limits',()=>{
   assert.equal(parseConfig({auth:{mode:'token'},audit:{maxFileBytes:16384},targets:{}}).audit.maxFileBytes,16384);
   assert.throws(()=>parseConfig({auth:{mode:'token'},audit:{maxFileBytes:8192},targets:{}}));
   assert.throws(()=>parseConfig({auth:{mode:'token'},audit:{maxFileBytes:1073741825},targets:{}}));
+});
+test('browser transfer limits have bounded defaults and reject unsafe values',()=>{
+  const config=parseConfig({auth:{mode:'token'},targets:{}});
+  assert.equal(config.limits.maxTransferBytes,64*1024*1024);assert.equal(config.limits.transferTimeoutMs,300000);
+  assert.equal(parseConfig({auth:{mode:'token'},limits:{maxTransferBytes:268435456,transferTimeoutMs:1800000},targets:{}}).limits.maxTransferBytes,268435456);
+  assert.throws(()=>parseConfig({auth:{mode:'token'},limits:{maxTransferBytes:268435457},targets:{}}));
+  assert.throws(()=>parseConfig({auth:{mode:'token'},limits:{transferTimeoutMs:999},targets:{}}));
 });

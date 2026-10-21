@@ -1,5 +1,6 @@
-import { appendFileSync, chmodSync, closeSync, existsSync, mkdirSync, openSync, readSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, closeSync, createReadStream, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { applyPatch, parsePatch } from 'diff';
 import type { Config, Target } from './config.js';
 import { assert, Fault, hash, quote, sleep, uid } from './core.js';
@@ -15,6 +16,12 @@ interface Command extends RecordValue {
   inputMode?: 'closed'|'pipe'; inputSequence?: number; inputBytes?: number; stdinClosed?: boolean; inputUncertain?: boolean;
 }
 interface Runtime { ssh: SSHConnection; busy: boolean; commandId?: string; cancelling: boolean; touched: number; job?: Promise<void>; inputBusy?: boolean; }
+interface DownloadTransfer { owner:string; viewId:string; sessionId:string; bytes:number; sha256:string; filename:string; nextOffset:number; touched:number; }
+async function digestFile(path:string){
+  const digest=createHash('sha256');let bytes=0;
+  for await(const chunk of createReadStream(path,{highWaterMark:1048576})){bytes+=chunk.length;digest.update(chunk);}
+  return {bytes,sha256:digest.digest('hex')};
+}
 export class ShellService {
   readonly store: Store;
   private readonly auditLog: AuditLog;
@@ -22,12 +29,18 @@ export class ShellService {
   private timer: NodeJS.Timeout;
   private stopping = false;
   private jobs=new Set<Promise<void>>();
+  private downloads=new Map<string,DownloadTransfer>();
   constructor(readonly config: Config) {
     mkdirSync(config.stateDir, { recursive:true, mode:0o700 }); chmodSync(config.stateDir,0o700);
     this.auditLog = new AuditLog(join(config.stateDir,'audit.jsonl'),{maxFileBytes:config.audit.maxFileBytes});
     try {
       this.store = new Store(config.stateDir);
       mkdirSync(join(config.stateDir, 'outputs'), { recursive:true, mode:0o700 });
+      const transferDir=join(config.stateDir,'transfers');
+      mkdirSync(transferDir,{recursive:true,mode:0o700});chmodSync(transferDir,0o700);
+      for(const entry of readdirSync(transferDir,{withFileTypes:true}))if(entry.isFile()&&entry.name.endsWith('.upload')){
+        const path=join(transferDir,entry.name);if(lstatSync(path).isFile())rmSync(path);
+      }
     } catch (error) {
       this.auditLog.close();
       throw error;
@@ -73,7 +86,7 @@ export class ShellService {
       return {sessionId:s.id,targetId:s.targetId,workspaceId:s.workspaceId,generation:s.generation,
         cwd:s.cwd,state:s.state,updatedAt:s.updatedAt,reason:s.reason};
     });
-    return {viewId:id,label:view.label,sessions};
+    return {viewId:id,label:view.label,maxTransferBytes:this.config.limits.maxTransferBytes,sessions};
   }
   private viewSession(owner:string,viewId:string,sessionId:string){
     const view=this.sessionView(owner,viewId);
@@ -88,6 +101,10 @@ export class ShellService {
   viewOutput(owner:string,viewId:string,commandId:string,stream:'stdout'|'stderr',cursor:number){
     const c=this.command(owner,commandId);this.viewSession(owner,viewId,c.sessionId);
     return this.readOutput(owner,commandId,stream,cursor);
+  }
+  validateViewFilePath(owner:string,viewId:string,sessionId:string,path:string){
+    this.viewSession(owner,viewId,sessionId);
+    assert(path.length>0&&path.length<=4096&&!/[\x00-\x1f\x7f]/.test(path),'INVALID_PATH','Remote path contains invalid characters');
   }
   async open(owner: string, targetId: string, workspaceId: string, key: string, scope='open', generation=1, previousSessionId?:string) {
     assert(!this.stopping,'SERVER_STOPPING','Server is stopping');
@@ -339,8 +356,124 @@ export class ShellService {
       const result=await ssh.exec(command,'',1048576); assert(result.code===0,'GIT_FAILED','Git query failed; workspace must be a repository'); return {output:result.stdout};
     });
   }
+  private uploadReceipt(owner:string,id:string){
+    const row=this.store.get('transfer',id,owner);
+    if(row.state==='completed')return {transferId:id,state:row.state,bytes:row.bytes,sha256:row.sha256};
+    if(row.state==='started')throw new Fault('TRANSFER_IN_PROGRESS','An upload with this request ID is still being resolved');
+    if(row.state==='unknown')throw new Fault('TRANSFER_UNKNOWN','Upload outcome is uncertain; inspect the remote workspace before retrying');
+    throw new Fault('TRANSFER_FAILED','Upload did not complete; use a new request ID for another attempt');
+  }
+  async uploadViewFile(owner:string,viewId:string,sessionId:string,path:string,localPath:string,requestId:string,signal?:AbortSignal){
+    this.validateViewFilePath(owner,viewId,sessionId,path);
+    assert(requestId.length>0&&requestId.length<=128,'INVALID_ARGUMENT','Invalid transfer request ID');
+    const local=await digestFile(localPath);
+    assert(local.bytes<=this.config.limits.maxTransferBytes,'FILE_TOO_LARGE','Upload exceeds the configured transfer limit');
+    const digest=hash(JSON.stringify([path,local.bytes,local.sha256])),scope=`view-upload:${viewId}:${sessionId}`;
+    const prior=this.store.request(owner,scope,requestId,digest);if(prior)return this.uploadReceipt(owner,prior);
+    this.assertAuditHealthy();
+    return this.locked(owner,sessionId,true,async(ssh,s)=>{
+      const repeated=this.store.request(owner,scope,requestId,digest);if(repeated)return this.uploadReceipt(owner,repeated);
+      const id=uid('u');let row:RecordValue={id,owner,state:'started',updatedAt:Date.now(),sessionId,viewId,
+        direction:'upload',bytes:local.bytes,sha256:local.sha256};
+      this.audit('file_upload_requested',owner,id,'accepted');
+      this.store.put('transfer',row);this.store.remember(owner,scope,requestId,digest,id);
+      let beginAttempted=false,stage='begin';
+      const remoteTimeout=this.config.limits.transferTimeoutMs;
+      try{
+        if(signal?.aborted)throw new Fault('TRANSFER_CANCELLED','Upload was cancelled before remote transfer began');
+        beginAttempted=true;
+        await ssh.helper({op:'upload_begin',root:s.root,path,transferId:id,bytes:local.bytes,
+          maxBytes:this.config.limits.maxTransferBytes,sha256:local.sha256},remoteTimeout);
+        let sequence=0,sent=0;
+        for await(const chunk of createReadStream(localPath,{highWaterMark:1048576})){
+          if(signal?.aborted)throw new Fault('TRANSFER_CANCELLED','Upload was cancelled before publication');
+          const args={op:'upload_chunk',transferId:id,sequence,content:Buffer.from(chunk).toString('base64')};
+          stage=`chunk_${sequence}`;
+          await ssh.helper(args,remoteTimeout);sequence++;sent+=chunk.length;
+        }
+        assert(sent===local.bytes,'TRANSFER_SOURCE_CHANGED','Staged upload changed before transfer');
+        if(signal?.aborted)throw new Fault('TRANSFER_CANCELLED','Upload was cancelled before publication');
+        let finished:{state:string;bytes:number;sha256:string};
+        stage='finish';
+        try{finished=await ssh.helper({op:'upload_finish',transferId:id},remoteTimeout);}
+        catch(error){
+          if(!ssh.running)throw error;
+          finished=await ssh.helper({op:'upload_finish',transferId:id},remoteTimeout);
+        }
+        assert(finished.state==='completed'&&finished.bytes===local.bytes&&finished.sha256===local.sha256,
+          'TRANSFER_UNKNOWN','Remote upload did not confirm its final checksum');
+        row=this.store.put('transfer',{...row,state:'completed'});
+        try{this.audit('file_upload',owner,id,'completed');}catch{return {transferId:id,state:'completed',bytes:local.bytes,sha256:local.sha256,auditWarning:'AUDIT_WRITE_FAILED'};}
+        return {transferId:id,state:'completed',bytes:local.bytes,sha256:local.sha256};
+      }catch(error){
+        let resolved:'failed'|'completed'|'unknown'=beginAttempted?'unknown':'failed';
+        if(beginAttempted&&ssh.running){
+          try{
+            const finished=await ssh.helper<{state:string;bytes:number;sha256:string}>({op:'upload_finish',transferId:id},remoteTimeout);
+            if(finished.state==='completed'&&finished.bytes===local.bytes&&finished.sha256===local.sha256)resolved='completed';
+          }catch{
+            try{
+              const aborted=await ssh.helper<{state:string}>({op:'upload_abort',transferId:id},remoteTimeout);
+              resolved=aborted.state==='completed'?'completed':aborted.state==='aborted'?'failed':'unknown';
+            }catch(abortError){if(abortError instanceof Fault&&abortError.code==='TRANSFER_NOT_FOUND')resolved='failed';}
+          }
+        }
+        row=this.store.put('transfer',{...row,state:resolved,reason:stage+':'+(error instanceof Fault?error.code:'TRANSFER_FAILED')});
+        try{this.audit('file_upload',owner,id,resolved);}catch{/* Retain the transfer outcome; the unhealthy audit chain blocks later mutations. */}
+        if(resolved==='completed')return {transferId:id,state:'completed',bytes:local.bytes,sha256:local.sha256,auditWarning:this.auditLog.healthy?undefined:'AUDIT_WRITE_FAILED'};
+        if(resolved==='unknown')throw new Fault('TRANSFER_UNKNOWN','Upload outcome is uncertain; inspect the remote workspace before retrying');
+        throw error;
+      }
+    });
+  }
+  async prepareViewDownload(owner:string,viewId:string,sessionId:string,path:string){
+    this.validateViewFilePath(owner,viewId,sessionId,path);
+    assert(this.downloads.size<Math.max(1,Math.min(4,this.config.limits.maxSessions)),'RESOURCE_LIMIT','Too many active downloads');
+    const {s,r}=this.runtime(owner,sessionId),id=uid('d');this.assertAuditHealthy();
+    this.audit('file_download_requested',owner,id,'accepted');
+    try{
+      const result=await r.ssh.helper<{transferId:string;bytes:number;sha256:string;modifiedAt:number;filename:string}>(
+        {op:'download_begin',root:s.root,path,transferId:id,maxBytes:this.config.limits.maxTransferBytes},
+        this.config.limits.transferTimeoutMs);
+      assert(result.transferId===id&&Number.isSafeInteger(result.bytes)&&result.bytes>=0&&result.bytes<=this.config.limits.maxTransferBytes,
+        'INVALID_REMOTE_RESULT','Remote download metadata is invalid');
+      assert(/^[a-f0-9]{64}$/.test(result.sha256)&&typeof result.filename==='string','INVALID_REMOTE_RESULT','Remote download metadata is invalid');
+      this.downloads.set(id,{owner,viewId,sessionId,bytes:result.bytes,sha256:result.sha256,filename:result.filename,nextOffset:0,touched:Date.now()});
+      return {transferId:id,bytes:result.bytes,sha256:result.sha256,modifiedAt:result.modifiedAt,filename:result.filename};
+    }catch(error){
+      try{this.audit('file_download',owner,id,'failed');}catch{/* Read failure remains visible to the caller. */}
+      throw error;
+    }
+  }
+  async readViewDownloadChunk(owner:string,viewId:string,sessionId:string,transferId:string,offset:number){
+    const transfer=this.downloads.get(transferId);
+    assert(transfer&&transfer.owner===owner&&transfer.viewId===viewId&&transfer.sessionId===sessionId,'NOT_FOUND','Download is not available');
+    assert(offset===transfer.nextOffset&&offset<=transfer.bytes,'INVALID_CURSOR','Download cursor is out of sequence');
+    if(offset===transfer.bytes)return Buffer.alloc(0);
+    const {r}=this.runtime(owner,sessionId),maximum=Math.min(2097152,transfer.bytes-offset);
+    const result=await r.ssh.helper<{transferId:string;offset:number;bytes:number;base64:string}>(
+      {op:'download_chunk',transferId,offset,maximum},this.config.limits.transferTimeoutMs);
+    const chunk=Buffer.from(result.base64,'base64');
+    assert(result.transferId===transferId&&result.offset===offset&&result.bytes===chunk.length&&chunk.length>0&&chunk.length<=maximum,
+      'INVALID_REMOTE_RESULT','Remote download chunk is invalid');
+    transfer.nextOffset+=chunk.length;transfer.touched=Date.now();return chunk;
+  }
+  async closeViewDownload(owner:string,viewId:string,sessionId:string,transferId:string,complete=false){
+    const transfer=this.downloads.get(transferId);if(!transfer)return;
+    assert(transfer.owner===owner&&transfer.viewId===viewId&&transfer.sessionId===sessionId,'NOT_FOUND','Download is not available');
+    this.downloads.delete(transferId);
+    const runtime=this.runtimes.get(sessionId);
+    if(runtime?.ssh.running)await runtime.ssh.helper({op:'download_finish',transferId},this.config.limits.transferTimeoutMs).catch(()=>{});
+    try{this.audit('file_download',owner,transferId,complete&&transfer.nextOffset===transfer.bytes?'completed':'closed');}catch{/* Download bytes have already been delivered or the caller disconnected. */}
+  }
+  private async expireDownload(id:string,transfer:DownloadTransfer){
+    this.downloads.delete(id);const runtime=this.runtimes.get(transfer.sessionId);
+    if(runtime?.ssh.running)await runtime.ssh.helper({op:'download_finish',transferId:id},this.config.limits.transferTimeoutMs).catch(()=>{});
+    try{this.audit('file_download',transfer.owner,id,'expired');}catch{/* The audit health flag remains visible to later mutations. */}
+  }
   private async sweep() {
     if(this.stopping)return;
+    for(const [id,transfer]of this.downloads)if(Date.now()-transfer.touched>this.config.limits.transferTimeoutMs)await this.expireDownload(id,transfer);
     for(const [id,r]of this.runtimes) if(!r.busy&&performance.now()-r.touched>this.config.limits.idleMs){
       const s=this.store.list('session').find(s=>s.id===id); if(s)await this.closeSession(s.owner,id).catch(()=>{});
     }

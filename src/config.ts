@@ -36,6 +36,8 @@ export const configSchema = z.object({
     retentionMs: z.number().int().min(1000).default(86400000),
     maxInputBytes: z.number().int().min(1).max(10485760).default(1048576),
     maxInputMessages: z.number().int().min(1).max(1024).default(128),
+    maxTransferBytes: z.number().int().min(1).max(268435456).default(67108864),
+    transferTimeoutMs: z.number().int().min(1000).max(1800000).default(300000),
     pollMs: z.number().int().min(50).max(5000).default(250)
   }).prefault({}),
   targets: z.record(identifier, z.object({

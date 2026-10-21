@@ -1,5 +1,15 @@
 # 오픈소스 조사 근거
 
+## 2026-10-22 v0.8: 파일 streaming 재검토
+
+`tufantunc/ssh-mcp`의 고정 리비전 `5c5b8476492cda568fca779b307ff8a2ca0bbbb7`에서 [전송 도구](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/tools/transfer-tools.ts), [SFTP 계층](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/ssh/sftp.ts), [README](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/README.md)를 다시 읽었습니다. 소스는 별도 구현이며 코드 복사는 없습니다. 중요한 기능은 파일 내용을 AI tool result에 싣지 않는 streaming, server-private staging, 크기 제한, 중복/부분 실패 정리였습니다.
+
+Shell MCP의 세 위치는 다릅니다. VS Code PC A가 선택한 파일을 B의 로컬 경로로 직접 읽을 수 없고, B가 인증 SSH 연결을 통해 C에 접근합니다. 그래서 browser의 명시적 파일 선택으로 A→B HTTP body를 만들고, B가 private staging 후 현재 SSH session helper 경로로 C에 업로드합니다. 다운로드는 C의 파일을 임시 snapshot/hash한 뒤 같은 browser response stream으로 A에 보냅니다. 이 방식은 existing postLogin shell gateway와 맞으며 SFTP subsystem 의존성을 추가하지 않습니다.
+
+OpenBSD [`sftp(1)`](https://man.openbsd.org/sftp.1)은 SFTP 파일 전송과 batch interface의 독립 도구 경로를 설명합니다. postLogin 대상에서는 SFTP subsystem이 추가 로그인 gate를 통과한다고 보장할 수 없으므로, 기존 인증된 SSH exec channel 안의 Python helper를 사용했습니다. Browser endpoint는 MCP tool arguments/results와 분리하지만 기존 토큰 권한을 그대로 사용하고, 사용자가 업로드 파일과 원격 경로를 직접 선택합니다.
+
+최종 구현은 64 MiB 기본/256 MiB 최대 크기, private B staging, SHA-256, 1 MiB/2 MiB 전송 chunk, C측 임시 snapshot, create-only 게시, 파일 충돌 거부, bounded concurrent transfers, 세션·view 소유권, 감사 결과, 불확실한 요청의 unknown 처리로 범위를 제한합니다. 자세한 동작·제한·격리 sshd 시험은 [V08_STATUS](V08_STATUS.md)에 기록했습니다. 실제 VS Code Integrated Browser, 실제 사용자 파일 picker/download, public HTTPS는 검증하지 않았습니다.
+
 ## 2026-10-22 v0.7: bounded 파일 목록 재조사
 
 `tufantunc/ssh-mcp` main `5c5b8476492cda568fca779b307ff8a2ca0bbbb7`의 [README](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/README.md)와 [CHANGELOG](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/CHANGELOG.md)를 웹에서 다시 확인했습니다. README는 제한된 `sftp-list`와 모델 context를 거치지 않는 file streaming을 설명합니다. 이 프로젝트는 현재 B의 로컬 transfer path가 A의 사용자 workspace를 가리키지 않으므로 streaming 전송을 보류하고, workspace 내부 bounded listing만 채택했습니다. OpenBSD `sftp ls -l`의 상세 목록을 참고해 metadata를 추가하되 [stat(2)](https://man.openbsd.org/stat.2)의 `lstat` 의미대로 symlink 자체만 봅니다.

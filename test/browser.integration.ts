@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { startServer } from '../src/server.js';
@@ -50,6 +50,54 @@ test('browser view: real SSH + MCP creation, bounded history/output, auth and ex
     assert(!('command' in commands[0]));assert(!('owner' in commands[0]));
     const output=(await (await get(path+'/commands/'+job.id+'/output?stream=stdout&cursor=0')).json()).result;
     assert.equal(Buffer.from(output.base64,'base64').toString(),payload);
+    const binary=Buffer.alloc(2*1024*1024+37);for(let i=0;i<binary.length;i++)binary[i]=(i*31+17)%256;
+    const localUpload=join(f.dir,'browser-transfer.bin');writeFileSync(localUpload,binary);
+    const fileUrl=(sessionId:string,remotePath:string,requestId?:string)=>{
+      const query=new URLSearchParams({path:remotePath});if(requestId)query.set('requestId',requestId);
+      return path+'/sessions/'+encodeURIComponent(sessionId)+'/files?'+query;
+    };
+    assert.equal((await get(fileUrl(s.id,'browser-transfer.bin'),false)).status,401);
+    assert.equal((await fetch(base+fileUrl(other.id,'denied.bin','outside-view'),{
+      method:'PUT',headers:{Authorization:'Bearer '+token,'Content-Type':'application/octet-stream'},body:Buffer.from('denied')
+    })).status,404);
+    assert.equal((await fetch(base+fileUrl(s.id,'denied-origin.bin','bad-origin'),{
+      method:'PUT',headers:{Authorization:'Bearer '+token,'Content-Type':'application/octet-stream',Origin:'https://untrusted.example'},body:Buffer.from('denied')
+    })).status,403);
+    const upload=await fetch(base+fileUrl(s.id,'browser-transfer.bin','browser-upload-1'),{
+      method:'PUT',headers:{Authorization:'Bearer '+token,'Content-Type':'application/octet-stream'},body:readFileSync(localUpload)
+    });
+    assert.equal(upload.status,200,JSON.stringify(await upload.clone().json()));
+    const uploadResult=(await upload.json()).result;assert.equal(uploadResult.state,'completed');assert.equal(uploadResult.bytes,binary.length);
+    const retry=await fetch(base+fileUrl(s.id,'browser-transfer.bin','browser-upload-1'),{
+      method:'PUT',headers:{Authorization:'Bearer '+token,'Content-Type':'application/octet-stream'},body:binary
+    });assert.equal(retry.status,200);assert.equal((await retry.json()).result.transferId,uploadResult.transferId);
+    const conflict=await fetch(base+fileUrl(s.id,'browser-transfer.bin','browser-upload-1'),{
+      method:'PUT',headers:{Authorization:'Bearer '+token,'Content-Type':'application/octet-stream'},body:Buffer.from('different body')
+    });assert.equal(conflict.status,409);assert.equal((await conflict.json()).error.code,'REQUEST_CONFLICT');
+    const download=await get(fileUrl(s.id,'browser-transfer.bin'));assert.equal(download.status,200);
+    assert.equal(download.headers.get('x-content-sha256'),uploadResult.sha256);
+    assert.deepEqual(Buffer.from(await download.arrayBuffer()),binary);
+    const oldLimit=f.config.limits.maxTransferBytes;f.config.limits.maxTransferBytes=1024;
+    assert.equal((await get(fileUrl(s.id,'browser-transfer.bin'))).status,413);
+    const tooLarge=await fetch(base+fileUrl(s.id,'too-large.bin','too-large'),{
+      method:'PUT',headers:{Authorization:'Bearer '+token,'Content-Type':'application/octet-stream'},body:binary
+    });assert.equal(tooLarge.status,413);f.config.limits.maxTransferBytes=oldLimit;
+    const existing=await fetch(base+fileUrl(s.id,'browser-transfer.bin','browser-upload-overwrite'),{
+      method:'PUT',headers:{Authorization:'Bearer '+token,'Content-Type':'application/octet-stream'},body:Buffer.from('replacement')
+    });assert.equal(existing.status,409);assert.equal((await existing.json()).error.code,'FILE_EXISTS');
+    assert.deepEqual(readFileSync(join(f.root,'browser-transfer.bin')),binary);
+    assert.equal((await get(fileUrl(other.id,'browser-transfer.bin'))).status,404);
+    const emptyUpload=await fetch(base+fileUrl(s.id,'empty.bin','empty-upload'),{
+      method:'PUT',headers:{Authorization:'Bearer '+token,'Content-Type':'application/octet-stream'},body:new Uint8Array()
+    });assert.equal(emptyUpload.status,200);assert.equal((await emptyUpload.json()).result.bytes,0);
+    const emptyDownload=await get(fileUrl(s.id,'empty.bin'));assert.equal(emptyDownload.status,200);assert.equal((await emptyDownload.arrayBuffer()).byteLength,0);
+    symlinkSync('/etc/hostname',join(f.root,'browser-transfer-link'));
+    assert.equal((await get(fileUrl(s.id,'browser-transfer-link'))).status,400);
+    assert.equal((await fetch(base+fileUrl(s.id,'browser-transfer.bin','bad-type'),{method:'PUT',headers:{Authorization:'Bearer '+token,'Content-Type':'text/plain'},body:'x'})).status,400);
+    assert.deepEqual(readdirSync(join(f.config.stateDir,'transfers')),[]);
+    const audit=readFileSync(join(f.config.stateDir,'audit.jsonl'),'utf8');
+    assert(audit.includes('file_upload_requested'));assert(audit.includes('file_upload'));
+    assert(!audit.includes('browser-transfer.bin'));assert(!audit.includes(binary.toString('base64').slice(0,64)));
     assert.equal((await get(path+'/commands/'+job.id+'/output?stream=stderr&cursor=-1')).status,400);
     assert.equal((await get(path+'/commands/'+job.id+'/output?stream=stdin')).status,400);
     const outside=await service.run('owner',other.id,'echo outside','outside',100,10000);await service.waitCommand('owner',outside.id,10000);
@@ -73,7 +121,8 @@ test('saved browser views are idempotent, owner scoped, bounded and survive rest
     assert.throws(()=>runtime.service.createSessionView('bob',[s.id],'foreign','other'),{code:'NOT_FOUND'});
     for(let i=0;i<55;i++)runtime.service.store.put('command',{id:'c_test_'+i,owner:'owner',state:'completed',updatedAt:Date.now(),sessionId:s.id,exitCode:0});
     const history=runtime.service.viewCommands('owner',a.viewId,s.id);assert.equal(history.length,50);assert.equal(history[0].commandId,'c_test_54');
-    await runtime.stop();runtime=await startServer(f.config);
+    await runtime.stop();writeFileSync(join(f.config.stateDir,'transfers','interrupted.upload'),'private fixture bytes',{mode:0o600});runtime=await startServer(f.config);
+    assert.deepEqual(readdirSync(join(f.config.stateDir,'transfers')),[]);
     const view=runtime.service.sessionView('owner',a.viewId);assert.equal(view.sessions.length,1);assert.equal(view.sessions[0].state,'closed');
   }finally{await runtime.stop();await f.close();delete process.env.SHELL_MCP_TEST_TOKEN;}
 });
@@ -88,6 +137,9 @@ test('viewer static assets have strict policies and never embed credentials',{ti
       assert.equal(response.headers.get('cache-control'),'no-store');assert.equal(response.headers.get('referrer-policy'),'no-referrer');
       assert(!(await response.text()).includes(token));
     }
+    const html=await (await fetch(base+'/sessions')).text(),js=await (await fetch(base+'/session-assets/app.js')).text();
+    assert(html.includes('type="file"'));assert(html.includes('원격 파일 전송'));assert(js.includes('XMLHttpRequest'));
+    assert(!js.includes('localStorage'));assert(!js.includes('sessionStorage'));
     assert.equal((await fetch(base+'/session-assets/no-such-file')).status,404);
   }finally{await runtime.stop();await f.close();delete process.env.SHELL_MCP_TEST_TOKEN;}
 });

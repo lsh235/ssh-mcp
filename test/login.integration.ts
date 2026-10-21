@@ -51,6 +51,14 @@ test('post-SSH gate: two prompt inputs, same-channel files/git/commands, stdin a
     const file=await s.readFile('owner',session.id,'example.txt') as {version:string};
     await s.patch('owner',session.id,'--- a/example.txt\n+++ b/example.txt\n@@ -1 +1 @@\n-before\n+after\n',{'example.txt':file.version},'patch');
     assert.equal((await s.readFile('owner',session.id,'example.txt') as {content:string}).content,'after\n');
+    const view=s.createSessionView('owner',[session.id],'gate transfer','gate-view');
+    const payload=Buffer.alloc(4097);for(let i=0;i<payload.length;i++)payload[i]=(i*19+3)%256;
+    const localUpload=join(f.dir,'gate-upload.bin');writeFileSync(localUpload,payload);
+    const uploaded=await s.uploadViewFile('owner',view.viewId,session.id,'gate-upload.bin',localUpload,'gate-upload-request');
+    assert.equal(uploaded.state,'completed');assert.deepEqual(readFileSync(join(f.root,'gate-upload.bin')),payload);
+    const download=await s.prepareViewDownload('owner',view.viewId,session.id,'gate-upload.bin'),parts:Buffer[]=[];let offset=0;
+    while(offset<download.bytes){const chunk=await s.readViewDownloadChunk('owner',view.viewId,session.id,download.transferId,offset);parts.push(chunk);offset+=chunk.length;}
+    assert.deepEqual(Buffer.concat(parts),payload);await s.closeViewDownload('owner',view.viewId,session.id,download.transferId,true);
     const c=await s.run('owner',session.id,'export GATE_STATE=kept; mkdir sub; cd sub; python3 -c "print(123)"','first',100,10000);
     assert.equal((await done(s,c.id)).exitCode,0);
     const c2=await s.run('owner',session.id,'printf "%s\\n" "$GATE_STATE"; pwd; git init -q .; git status --porcelain','second',100,10000);

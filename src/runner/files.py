@@ -1,5 +1,5 @@
 """One-shot helper over an authenticated SSH channel, never a listening service."""
-import base64, hashlib, json, os, pathlib, signal, stat, sys, tempfile, time
+import base64, hashlib, json, os, pathlib, re, signal, stat, sys, tempfile, time
 
 MAX_DIRECTORY_ENTRIES = 10000
 MAX_DIRECTORY_NAME_BYTES = 8 * 1024 * 1024
@@ -39,6 +39,56 @@ def read_regular(path, limit=1048576):
     if len(data) > limit:
         fail('FILE_TOO_LARGE', 'File exceeds configured operation limit')
     return data
+
+def transfer_id(value, prefix):
+    if not isinstance(value, str) or not re.fullmatch(prefix + r'_[a-f0-9-]{36}', value):
+        fail('INVALID_TRANSFER', 'Invalid transfer ID')
+    return value
+
+def transfer_meta_path(directory, value):
+    return pathlib.Path(directory) / (value + '.json')
+
+def load_transfer(directory, value):
+    path = transfer_meta_path(directory, value)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'r', encoding='utf-8') as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                fail('INVALID_TRANSFER', 'Transfer state is invalid')
+            data = json.load(f)
+    except FileNotFoundError:
+        fail('TRANSFER_NOT_FOUND', 'Transfer state is unavailable')
+    except (OSError, ValueError):
+        fail('INVALID_TRANSFER', 'Transfer state is invalid')
+    if data.get('id') != value:
+        fail('INVALID_TRANSFER', 'Transfer state does not match')
+    return data
+
+def save_transfer(directory, data):
+    fd, temporary = tempfile.mkstemp(prefix=data['id'] + '.pending.', dir=directory)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f); f.flush(); os.fsync(f.fileno())
+        os.replace(temporary, transfer_meta_path(directory, data['id']))
+        dirfd = os.open(directory, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        try: os.fsync(dirfd)
+        finally: os.close(dirfd)
+    finally:
+        if os.path.exists(temporary): os.unlink(temporary)
+
+def hash_regular(path, limit):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    digest, size = hashlib.sha256(), 0
+    with os.fdopen(fd, 'rb') as f:
+        info = os.fstat(f.fileno())
+        if not stat.S_ISREG(info.st_mode): fail('INVALID_FILE', 'Only regular files are supported')
+        while True:
+            chunk = f.read(1048576)
+            if not chunk: break
+            size += len(chunk)
+            if size > limit: fail('FILE_TOO_LARGE', 'File exceeds configured transfer limit')
+            digest.update(chunk)
+    return size, digest.hexdigest()
 
 def main(a):
     op = a['op']
@@ -218,6 +268,185 @@ def main(a):
         return {'entries':entries, 'nextCursor':next_offset if next_offset<len(names) else None,
                 'scannedEntries':len(names), 'incomplete':bool(limitations),
                 'limitations':sorted(limitations), 'snapshot':False}
+    if op == 'upload_begin':
+        transfer = transfer_id(a.get('transferId'), 'u')
+        destination = path_in(root, a.get('path'), new=True)
+        if destination == pathlib.Path(root): fail('INVALID_PATH', 'Cannot replace the workspace root')
+        if not destination.parent.is_dir(): fail('INVALID_PATH', 'Parent directory must already exist')
+        if isinstance(a.get('bytes'), bool) or not isinstance(a.get('bytes'), int) or a['bytes'] < 0:
+            fail('INVALID_TRANSFER', 'Invalid upload size')
+        maximum = a.get('maxBytes')
+        if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < 0:
+            fail('INVALID_TRANSFER', 'Invalid upload limit')
+        if a['bytes'] > maximum:
+            fail('FILE_TOO_LARGE', 'Upload exceeds the configured transfer limit')
+        if not re.fullmatch(r'[a-f0-9]{64}', a.get('sha256', '')):
+            fail('INVALID_TRANSFER', 'Invalid upload checksum')
+        metadata = transfer_meta_path(directory, transfer)
+        if os.path.exists(metadata):
+            record = load_transfer(directory, transfer)
+            if (record.get('destination') != str(destination) or record.get('bytesExpected') != a['bytes']
+                or record.get('sha256Expected') != a['sha256']):
+                fail('TRANSFER_CONFLICT', 'Transfer ID was already used with different file metadata')
+            return {'transferId':transfer, 'state':record['state'], 'bytes':record['received']}
+        if os.path.lexists(destination): fail('FILE_EXISTS', 'Refusing to overwrite an existing workspace file')
+        temporary = destination.parent / ('.shell-mcp-' + transfer + '.part')
+        record = {'id':transfer, 'state':'uploading', 'destination':str(destination),
+                  'temporary':str(temporary), 'bytesExpected':a['bytes'], 'sha256Expected':a['sha256'],
+                  'received':0, 'nextSequence':0, 'lastSequence':None, 'lastChunkHash':None}
+        try:
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            os.close(fd)
+            save_transfer(directory, record)
+        except Exception:
+            try: os.unlink(temporary)
+            except FileNotFoundError: pass
+            raise
+        return {'transferId':transfer, 'state':'uploading', 'bytes':0}
+    if op == 'upload_chunk':
+        transfer = transfer_id(a.get('transferId'), 'u')
+        record = load_transfer(directory, transfer)
+        if record.get('state') == 'completed':
+            return {'transferId':transfer, 'state':'completed', 'bytes':record['bytesExpected']}
+        if record.get('state') != 'uploading': fail('TRANSFER_UNKNOWN', 'Upload state is uncertain')
+        sequence = a.get('sequence')
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
+            fail('INVALID_TRANSFER', 'Invalid upload sequence')
+        try: chunk = base64.b64decode(a.get('content', ''), validate=True)
+        except (ValueError, TypeError): fail('INVALID_DATA', 'Invalid upload chunk')
+        if len(chunk) > 1048576 or not chunk: fail('INVALID_TRANSFER', 'Upload chunks must contain 1 to 1048576 bytes')
+        chunk_hash = hashlib.sha256(chunk).hexdigest()
+        temporary = pathlib.Path(record['temporary'])
+        try:
+            fd = os.open(temporary, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, 'r+b') as f:
+                if not stat.S_ISREG(os.fstat(f.fileno()).st_mode): fail('INVALID_FILE', 'Upload staging file is invalid')
+                f.seek(0, os.SEEK_END)
+                if f.tell() != record['received']: fail('TRANSFER_UNKNOWN', 'Upload staging size does not match its confirmed state')
+                if sequence == record['lastSequence']:
+                    if chunk_hash != record['lastChunkHash'] or len(chunk) != record['lastChunkBytes']:
+                        fail('TRANSFER_CONFLICT', 'Upload sequence was already used with different bytes')
+                    return {'transferId':transfer, 'state':'uploading', 'sequence':sequence,
+                            'bytes':record['received'], 'duplicate':True}
+                if sequence != record['nextSequence']:
+                    fail('TRANSFER_SEQUENCE', 'Upload chunk sequence is not the next expected value')
+                if record['received'] + len(chunk) > record['bytesExpected']:
+                    fail('TRANSFER_LIMIT', 'Upload exceeds its declared size')
+                f.write(chunk); f.flush(); os.fsync(f.fileno())
+        except FileNotFoundError: fail('TRANSFER_NOT_FOUND', 'Upload staging file is unavailable')
+        record.update({'received':record['received'] + len(chunk), 'nextSequence':sequence + 1,
+                       'lastSequence':sequence, 'lastChunkHash':chunk_hash, 'lastChunkBytes':len(chunk)})
+        save_transfer(directory, record)
+        return {'transferId':transfer, 'state':'uploading', 'sequence':sequence, 'bytes':record['received']}
+    if op == 'upload_finish':
+        transfer = transfer_id(a.get('transferId'), 'u')
+        record = load_transfer(directory, transfer)
+        if record.get('state') == 'completed':
+            try: os.unlink(record['temporary'])
+            except FileNotFoundError: pass
+            return {'transferId':transfer, 'state':'completed', 'bytes':record['bytesExpected'], 'sha256':record['sha256Expected']}
+        if record.get('state') not in ('uploading', 'publishing'):
+            fail('TRANSFER_UNKNOWN', 'Upload state is uncertain')
+        destination, temporary = pathlib.Path(record['destination']), pathlib.Path(record['temporary'])
+        if record['received'] != record['bytesExpected']:
+            fail('TRANSFER_INCOMPLETE', 'Uploaded byte count does not match the declared size')
+        size, checksum = hash_regular(temporary, record['bytesExpected'])
+        if size != record['bytesExpected'] or checksum != record['sha256Expected']:
+            fail('TRANSFER_CHECKSUM', 'Uploaded bytes do not match the declared checksum')
+        if os.path.lexists(destination):
+            if record.get('state') == 'publishing':
+                try:
+                    source_info, published_info = os.stat(temporary, follow_symlinks=False), os.lstat(destination)
+                    same_inode = (source_info.st_dev, source_info.st_ino) == (published_info.st_dev, published_info.st_ino)
+                except FileNotFoundError:
+                    same_inode = False
+                if same_inode:
+                    record['state'] = 'completed'; save_transfer(directory, record)
+                    try: os.unlink(temporary)
+                    except FileNotFoundError: pass
+                    return {'transferId':transfer, 'state':'completed', 'bytes':size, 'sha256':checksum}
+            fail('FILE_EXISTS', 'Refusing to overwrite an existing workspace file')
+        if record.get('state') != 'publishing':
+            record['state'] = 'publishing'; save_transfer(directory, record)
+        try:
+            os.link(temporary, destination, follow_symlinks=False)
+        except FileExistsError:
+            fail('FILE_EXISTS', 'Refusing to overwrite an existing workspace file')
+        dirfd = os.open(destination.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        try: os.fsync(dirfd)
+        finally: os.close(dirfd)
+        record['state'] = 'completed'; save_transfer(directory, record)
+        try: os.unlink(temporary)
+        except FileNotFoundError: pass
+        return {'transferId':transfer, 'state':'completed', 'bytes':size, 'sha256':checksum}
+    if op == 'upload_abort':
+        transfer = transfer_id(a.get('transferId'), 'u')
+        record = load_transfer(directory, transfer)
+        if record.get('state') == 'completed':
+            return {'transferId':transfer, 'state':'completed'}
+        if record.get('state') == 'publishing':
+            fail('TRANSFER_UNKNOWN', 'Upload publication is in progress; inspect the destination before retrying')
+        try: os.unlink(record['temporary'])
+        except FileNotFoundError: pass
+        record['state'] = 'aborted'; save_transfer(directory, record)
+        return {'transferId':transfer, 'state':'aborted'}
+    if op == 'download_begin':
+        transfer = transfer_id(a.get('transferId'), 'd')
+        source = path_in(root, a.get('path'))
+        fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        staged = pathlib.Path(directory) / (transfer + '.download')
+        try:
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode): fail('INVALID_FILE', 'Only regular files can be downloaded')
+            maximum = a.get('maxBytes')
+            if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < 0:
+                fail('INVALID_TRANSFER', 'Invalid download limit')
+            if before.st_size > maximum: fail('FILE_TOO_LARGE', 'Remote file exceeds the configured transfer limit')
+            outfd = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            checksum_state, total = hashlib.sha256(), 0
+            with os.fdopen(fd, 'rb') as src, os.fdopen(outfd, 'wb') as out:
+                while True:
+                    chunk = src.read(1048576)
+                    if not chunk: break
+                    total += len(chunk)
+                    if total > maximum: fail('FILE_TOO_LARGE', 'Remote file grew beyond the configured transfer limit')
+                    checksum_state.update(chunk); out.write(chunk)
+                out.flush(); os.fsync(out.fileno())
+                after = os.fstat(src.fileno())
+            if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns) or total != before.st_size:
+                fail('SOURCE_CHANGED', 'Remote file changed while preparing the download')
+            return {'transferId':transfer, 'bytes':total, 'sha256':checksum_state.hexdigest(),
+                    'modifiedAt':int(before.st_mtime * 1000), 'filename':source.name}
+        except Exception:
+            try: os.unlink(staged)
+            except FileNotFoundError: pass
+            raise
+        finally:
+            try: os.close(fd)
+            except OSError: pass
+    if op == 'download_chunk':
+        transfer = transfer_id(a.get('transferId'), 'd')
+        offset, maximum = a.get('offset'), a.get('maximum')
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            fail('INVALID_CURSOR', 'Invalid download cursor')
+        if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < 1 or maximum > 2097152:
+            fail('INVALID_TRANSFER', 'Invalid download chunk size')
+        path = pathlib.Path(directory) / (transfer + '.download')
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, 'rb') as f:
+                info = os.fstat(f.fileno())
+                if not stat.S_ISREG(info.st_mode): fail('INVALID_FILE', 'Download staging file is invalid')
+                if offset > info.st_size: fail('INVALID_CURSOR', 'Download cursor exceeds file size')
+                f.seek(offset); data = f.read(min(maximum, info.st_size - offset))
+        except FileNotFoundError: fail('TRANSFER_NOT_FOUND', 'Download staging file is unavailable')
+        return {'transferId':transfer, 'offset':offset, 'bytes':len(data), 'base64':base64.b64encode(data).decode('ascii')}
+    if op == 'download_finish':
+        transfer = transfer_id(a.get('transferId'), 'd')
+        try: os.unlink(pathlib.Path(directory) / (transfer + '.download'))
+        except FileNotFoundError: pass
+        return {'transferId':transfer, 'state':'closed'}
     if op == 'read':
         path = path_in(root, a['path'])
         data = read_regular(path)

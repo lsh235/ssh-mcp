@@ -13,8 +13,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS requests(owner TEXT NOT NULL,scope TEXT NOT NULL,key TEXT NOT NULL,digest TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(owner,scope,key));
       CREATE TABLE IF NOT EXISTS command_order(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE NOT NULL,owner TEXT NOT NULL);
       INSERT OR IGNORE INTO command_order(id,owner) SELECT id,owner FROM records WHERE kind='command' ORDER BY json_extract(data,'$.startedAt'),id;`);
-    for (const kind of ['session', 'command', 'input']) for (const row of this.list(kind)) {
-      if (['opening', 'ready', 'busy', 'accepted', 'running', 'cancel_requested'].includes(row.state)) {
+    for (const kind of ['session', 'command', 'input', 'transfer']) for (const row of this.list(kind)) {
+      if (['opening', 'ready', 'busy', 'accepted', 'running', 'cancel_requested', 'started'].includes(row.state)) {
         this.put(kind, { ...row, state: kind === 'session' ? 'broken' : 'unknown', reason: 'SERVER_RESTART', exitCode: null });
       }
     }

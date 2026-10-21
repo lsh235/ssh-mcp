@@ -32,7 +32,8 @@
 | P1 / v0.6 구현 | 체인 연속성을 보존하는 감사 회전 | 원본은 100 MiB 활성 파일과 10개 번호 파일을 회전하지만 검토한 store는 활성 파일의 마지막 해시를 읽고 전체 보관 구간을 검증하는 흐름은 찾지 못함 | Shell MCP는 세그먼트 파일명에 순번 범위/head를 넣고 시작·끝 이벤트를 체인에 포함. staging 복구·hard-link 구간 보존·전체 보관 구간 검증을 구현. 구간 삭제/체인 불일치/재시작 시험으로 검증. 자동 보존기간 삭제는 하지 않아 전체 디스크 관리는 남음 |
 | P2 / v0.7 구현 | 제한된 원격 파일 목록과 메타데이터 | `tufantunc/ssh-mcp`의 bounded `sftp-list`는 디렉터리 항목/응답 바이트 제한을 설명함. OpenSSH `sftp ls -l`도 상세 파일 정보를 노출. Shell MCP는 workspace 제한이 있으므로 직접 SFTP 경로 모델보다 기존 helper와 `lstat` 경계를 사용 | 최대 10,000개 항목/8 MiB 이름 데이터, 100개 페이지, 일반 파일 크기·수정 시각·권한 표시. symlink 대상 추적 금지. 대형 목록에 `incomplete`와 제한 사유 표시. 실제 SSH 시험 통과 |
 | P3 / 조사 필요 | 선택형 명령 승인 정책 | VS Code는 `readOnlyHint`가 아닌 도구의 확인 UI와 Elicitation을 설명함. `tufantunc/ssh-mcp`에는 승인 정책이 있지만 SECURITY/changelog에 명령 분류기 우회가 반복 공개됨 | 기본 도구 확인과 서버 측 `ask-all`을 구분. 적용한다면 classifier 없이 매 명령을 fail-closed로 승인하고 실제 Copilot에서 native dialog 중복·무응답 동작을 검증 |
-| P4 / 조사 필요 | 스트리밍 SFTP/아티팩트 이동 | 큰 파일을 AI 문맥으로 통과시키지 않는 업스트림 도구는 유용하지만, B의 로컬 경로는 VS Code A의 workspace 파일을 뜻하지 않음 | B의 전용 private transferRoot와 A/B/C 파일 소유권을 먼저 설계. 경로 상한·체크섬·부분 전송·덮어쓰기·symlink·실패 복구와 감사 모델을 정하고 격리 SSH 시험 추가 |
+| P4 / v0.8 구현 | 브라우저 경유 아티팩트 이동 | 업스트림은 제한된 transfer root와 모델 문맥 밖 파일 streaming을 제공. B의 로컬 경로가 A의 로컬 파일을 가리키지는 않으므로 브라우저가 선택한 파일을 A→B→C로 전달 | 최대 64 MiB 기본/256 MiB 설정 상한, 1 MiB 청크 업로드, 2 MiB 청크 다운로드, SHA-256, create-only 원자적 게시, 요청 ID 중복 조회, 세션·workspace 경계, 감사, postLogin helper 재사용을 구현. 격리 OpenSSH 실험 통과 |
+| P5 / 조사 필요 | 재개 가능한 전송과 미완료 조각 관리 | 동일 페이지의 요청 ID는 재조회할 수 있지만 서버 재시작 뒤 브라우저가 요청 ID를 잃고, remote `.part`가 남을 수 있음 | 전송 journal 지속 범위, 원격 조각 청소의 소유권·보존 기한, 사용자 승인 재개/폐기 UX를 웹 조사와 함께 설계. unknown 결과 자동 재실행은 하지 않음 |
 | P5 / 조사 필요 | PTY 기반 대화형 프로그램 | 현재 명령은 재현성 있는 non-PTY Bash를 기본으로 함. TUI/REPL 사용 요청이 확인되면 추가 이점이 있음 | PTY를 기존 managed shell과 분리된 세션 모드로 평가하고 terminal resize, ANSI 출력, interrupt, 게이트 입력, 세션 유실 시험을 설계 |
 | 보류 | 업스트림의 직접 SSH credential/profile, 임의 HTTP 상태 화면, 명령 문자열 위험 분류 | 본 프로젝트는 설치 PC의 OpenSSH config·키·agent, 기존 소유권 보호, 인증된 읽기 전용 브라우저 뷰가 요구됨. 원본 SECURITY 문서에는 classifier bypass 관련 공개 권고가 여러 개 있음 | 요구사항이 바뀌지 않는 한 현재 모델을 대체하지 않음 |
 
@@ -52,4 +53,11 @@
 - VS Code의 [MCP 개발 안내](https://code.visualstudio.com/api/extension-guides/ai/mcp)는 `readOnlyHint`가 아닌 도구의 확인 UI와 Elicitation을 문서화합니다. 실제 사용자 Copilot harness의 수용 시험은 아니므로 서버 측 승인 기능은 이번에 추가하지 않았습니다.
 - 업스트림 소스는 복사하지 않았습니다. 개념만 기존 workspace 상대경로·SSH helper·고정 100-entry page에 맞게 새로 구현했습니다.
 
-기능 백로그는 순위가 낮아도 새 웹 조사와 사용자 요구에 따라 다시 평가합니다. 다음은 A/B/C 경로가 서로 다른 SFTP streaming 요구를 조사합니다. 사용자 PC A의 로컬 파일 경로를 B에서 읽는 것처럼 다루지 않습니다.
+## 2026-10-22 v0.8 라운드
+
+- [tufantunc/ssh-mcp 기준 리비전](https://github.com/tufantunc/ssh-mcp/tree/5c5b8476492cda568fca779b307ff8a2ca0bbbb7)의 README와 [transfer-tools.ts](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/tools/transfer-tools.ts), [SFTP adapter](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/ssh/sftp.ts)를 다시 조사했습니다. private transfer root, 제한된 파일 크기·idle timeout, 모델 문맥을 통하지 않는 streaming이 유용했습니다. OpenBSD [sftp(1)](https://man.openbsd.org/sftp.1)도 지원 동작을 확인할 때 참고했습니다.
+- 기존 server는 B의 로컬 파일을 A의 VS Code workspace 파일처럼 취급하지 않습니다. 사용자가 브라우저에서 선택한 파일만 HTTPS body로 B에 보내고, 기존 인증 SSH helper로 C에 옮기도록 적응했습니다. postLogin 게이트도 기존 SSH exec channel을 재사용합니다. 직접 SFTP subsystem이나 C의 listening service는 추가하지 않았습니다.
+- A→B의 private staging, B→C의 1 MiB 체크섬 청크와 create-only hard-link 게시, C→B 임시 snapshot과 SHA-256 검증, B→A 브라우저 streaming을 구현했습니다. 덮어쓰기·symlink·workspace 밖 경로를 거부하고 request ID 응답 재조회, 서버 재기동 후 unknown 전환, 동시/누적 transfer 상한, audit 이벤트를 추가했습니다.
+- 소스 코드는 복사하지 않았습니다. 격리 OpenSSH 통합 시험에서 2 MiB 초과 바이너리 왕복·checksum·중복 요청·충돌·기존 파일 보호·view 밖 session·symlink 거부를 확인했습니다. 사용자 VS Code Browser의 로컬 파일 선택/다운로드 UX는 별도 NOT RUN입니다.
+
+기능 백로그는 매 라운드 새 웹 근거와 사용자 요구로 다시 정렬합니다. 현재 다음 후보는 재시작 이후의 안전한 transfer 재개·미완료 조각 보존 정책이며, unknown 결과를 자동 재실행하지 않는 원칙을 유지합니다.

@@ -101,8 +101,8 @@ export class SSHConnection {
       child.stdin.on('error', () => {}); child.stdin.end(input);
     });
   }
-  async helper<T = Record<string, unknown>>(args: Record<string, unknown>): Promise<T> {
-    const result = await this.exec(`python3 -c ${quote(helper)}`, JSON.stringify({dir: this.remoteDir || undefined, ...args}), 4194304);
+  async helper<T = Record<string, unknown>>(args: Record<string, unknown>, timeout=15000): Promise<T> {
+    const result = await this.exec(`python3 -c ${quote(helper)}`, JSON.stringify({dir: this.remoteDir || undefined, root:this.root || undefined, ...args}), 4194304, timeout);
     assert(result.code === 0, 'REMOTE_HELPER_FAILED', 'Remote helper failed; Python 3 and required SSH channels must be available');
     let data: {result: T; error?: {code: string; message: string}};
     try { data = JSON.parse(result.stdout); } catch { throw new Fault('INVALID_REMOTE_RESULT', 'Remote helper returned an invalid result'); }

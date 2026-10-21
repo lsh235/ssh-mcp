@@ -1,11 +1,11 @@
 const $=id=>document.getElementById(id);
 const names={ready:'대기 중',busy:'실행 중',opening:'연결 중',closed:'종료',broken:'연결 끊김',accepted:'접수',running:'실행 중',completed:'완료',unknown:'확인 불가',cancelled:'취소됨',timed_out:'시간 초과',cancel_requested:'취소 중'};
 let token='',viewId='',selectedSession='',selectedCommand='',commands=[],generation=0,busy=false,outputBusy=false;
-let streams,sessionKey='',commandKey='';
+let streams,sessionKey='',commandKey='',maxTransferBytes=67108864,transferBusy=false,uploadIdentity='',uploadRequestId='';
 function resetStreams(){streams=Object.fromEntries(['stdout','stderr'].map(s=>[s,{cursor:0,text:'',decoder:new TextDecoder(),trimmed:false}]));for(const s of ['stdout','stderr']){$(s).textContent='';$(s+'-position').textContent='';}$('output-note').textContent='';}
 resetStreams();
 function error(message){$('error').textContent=message;$('error').hidden=!message;}
-async function api(path){const response=await fetch('/viewer-api/views/'+encodeURIComponent(viewId)+path,{headers:{Authorization:'Bearer '+token},cache:'no-store',credentials:'omit',redirect:'error'});const body=await response.json();if(!response.ok){const e=new Error(body.error?.code||'REQUEST_FAILED');e.status=response.status;throw e;}return body.result;}
+async function api(path){const response=await fetch('/viewer-api/views/'+encodeURIComponent(viewId)+path,{headers:{Authorization:'Bearer '+token},cache:'no-store',credentials:'omit',redirect:'error'});const body=await response.json();if(!response.ok){const e=new Error(body.error?.code||'REQUEST_FAILED');e.status=response.status;throw e;}if(path===''&&Number.isSafeInteger(body.result.maxTransferBytes)){maxTransferBytes=body.result.maxTransferBytes;$('transfer-limit').textContent='파일당 최대 '+formatBytes(maxTransferBytes);}return body.result;}
 function element(tag,text,className){const e=document.createElement(tag);e.textContent=text;if(className)e.className=className;return e;}
 function badge(state,exitCode){const failed=state==='completed'&&exitCode!==0||['broken','unknown','cancelled','timed_out'].includes(state);return element('span',(names[state]||state)+(exitCode===undefined||exitCode===null?'':' · '+exitCode),'badge'+(failed?' bad':''));}
 function selectSession(id){selectedSession=id;selectedCommand='';commands=[];commandKey='';generation++;resetStreams();$('command-list').replaceChildren();$('command-info').textContent='명령을 선택하면 결과를 표시합니다.';$('more-output').disabled=true;}
@@ -18,3 +18,38 @@ function disconnect(){token='';sessionKey='';commandKey='';generation++;selected
 function locationChanged(){disconnect();viewId=location.hash.slice(1);const valid=/^v_[a-f0-9-]+$/.test(viewId);$('login-form').hidden=!valid;$('setup-help').hidden=valid;error('');}
 $('login-form').addEventListener('submit',async event=>{event.preventDefault();token=$('token').value;$('token').value='';$('login').hidden=true;$('monitor').hidden=false;$('logout').hidden=false;await refresh();});
 $('refresh').addEventListener('click',refresh);$('more-output').addEventListener('click',readOutput);$('logout').addEventListener('click',()=>{disconnect();error('');});window.addEventListener('hashchange',locationChanged);window.addEventListener('pagehide',disconnect);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});setInterval(()=>{if(!document.hidden)refresh();},2000);locationChanged();
+
+function formatBytes(value){if(value<1024)return value+' B';const units=['KiB','MiB','GiB'];let size=value/1024,index=0;while(size>=1024&&index<units.length-1){size/=1024;index++;}return size.toFixed(size>=10?0:1)+' '+units[index];}
+function transferMessage(message,isError=false){const node=$('transfer-note');node.textContent=message;node.classList.toggle('bad',isError);}
+function filesUrl(path,requestId){const query=new URLSearchParams({path});if(requestId)query.set('requestId',requestId);return '/viewer-api/views/'+encodeURIComponent(viewId)+'/sessions/'+encodeURIComponent(selectedSession)+'/files?'+query;}
+function downloadName(response,path){const value=response.headers.get('content-disposition')||'';const match=value.match(/filename\*=UTF-8''([^;]+)/i);if(match){try{return decodeURIComponent(match[1]);}catch{}}return path.split('/').filter(Boolean).at(-1)||'download';}
+$('remote-path').addEventListener('input',()=>{const file=$('local-file').files?.[0];$('download-file').disabled=!selectedSession||!$('remote-path').value.trim()||transferBusy;$('upload-file').disabled=!selectedSession||!file||!$('remote-path').value.trim()||transferBusy;});
+$('local-file').addEventListener('change',()=>{const file=$('local-file').files?.[0];if(file&&!$('remote-path').value.trim())$('remote-path').value=file.name;uploadIdentity='';uploadRequestId='';$('upload-file').disabled=!selectedSession||!file||!$('remote-path').value.trim()||transferBusy;});
+$('session-list').addEventListener('click',()=>{uploadIdentity='';uploadRequestId='';$('local-file').value='';$('remote-path').value='';$('upload-file').disabled=true;$('download-file').disabled=true;transferMessage('작업 공간 기준 상대 경로를 입력하세요.');});
+$('logout').addEventListener('click',()=>{uploadIdentity='';uploadRequestId='';$('local-file').value='';$('remote-path').value='';transferMessage('다시 연결하면 파일 전송을 사용할 수 있습니다.');});
+$('upload-file').addEventListener('click',()=>{
+  if(transferBusy||!selectedSession||!token)return;
+  const file=$('local-file').files?.[0],path=$('remote-path').value.trim();if(!file||!path)return;
+  if(file.size>maxTransferBytes){transferMessage('파일이 서버 설정 한도 '+formatBytes(maxTransferBytes)+'를 넘습니다.',true);return;}
+  const identity=[selectedSession,path,file.name,file.size,file.lastModified].join('\0');
+  if(identity!==uploadIdentity){uploadIdentity=identity;uploadRequestId=crypto.randomUUID();}
+  transferBusy=true;$('upload-file').disabled=true;$('download-file').disabled=true;
+  const xhr=new XMLHttpRequest();xhr.open('PUT',filesUrl(path,uploadRequestId));xhr.setRequestHeader('Authorization','Bearer '+token);xhr.setRequestHeader('Content-Type','application/octet-stream');xhr.timeout=1800000;
+  xhr.upload.onprogress=event=>{if(event.lengthComputable)transferMessage('업로드 중 · '+formatBytes(event.loaded)+' / '+formatBytes(event.total));};
+  xhr.onload=()=>{let body={};try{body=JSON.parse(xhr.responseText);}catch{}if(xhr.status>=200&&xhr.status<300&&body.result?.state==='completed'){transferMessage('업로드 완료 · '+formatBytes(body.result.bytes)+' · SHA-256 '+body.result.sha256);uploadIdentity='';uploadRequestId='';$('local-file').value='';}else{const code=body.error?.code||'TRANSFER_FAILED';const message=code==='FILE_EXISTS'?'원격 경로에 파일이 이미 있습니다. 기존 파일은 덮어쓰지 않았습니다.':code==='TRANSFER_UNKNOWN'||code==='TRANSFER_IN_PROGRESS'?'결과를 확정할 수 없습니다. 같은 파일과 요청으로 확인하거나 원격 파일을 직접 확인하세요.':code==='FILE_TOO_LARGE'?'파일이 서버 설정 한도를 넘습니다.':code==='INVALID_PATH'?'경로가 작업 공간을 벗어나거나 유효하지 않습니다.':'업로드 실패 · '+code;transferMessage(message,true);}};
+  xhr.onerror=()=>transferMessage('연결이 끊겼습니다. 결과가 불확실할 수 있어 같은 파일·경로로 다시 확인하세요.',true);
+  xhr.ontimeout=()=>transferMessage('업로드 응답 시간이 초과됐습니다. 같은 파일·경로로 다시 확인하기 전 원격 결과를 살펴보세요.',true);
+  xhr.onloadend=()=>{transferBusy=false;$('upload-file').disabled=!selectedSession||!$('local-file').files?.[0]||!$('remote-path').value.trim();$('download-file').disabled=!selectedSession||!$('remote-path').value.trim();};
+  transferMessage('업로드 준비 중…');xhr.send(file);
+});
+$('download-file').addEventListener('click',async()=>{
+  if(transferBusy||!selectedSession||!token)return;const path=$('remote-path').value.trim();if(!path)return;
+  transferBusy=true;$('upload-file').disabled=true;$('download-file').disabled=true;transferMessage('원격 파일을 준비하고 있습니다…');
+  try{
+    const response=await fetch(filesUrl(path),{headers:{Authorization:'Bearer '+token},cache:'no-store',credentials:'omit',redirect:'error'});
+    if(!response.ok){let code='TRANSFER_FAILED';try{code=(await response.json()).error?.code||code;}catch{}throw Object.assign(new Error(code),{status:response.status});}
+    const blob=await response.blob(),name=downloadName(response,path),url=URL.createObjectURL(blob),anchor=document.createElement('a');anchor.href=url;anchor.download=name;anchor.hidden=true;document.body.append(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
+    transferMessage('다운로드 완료 · '+formatBytes(blob.size)+' · '+name+' · SHA-256 '+(response.headers.get('x-content-sha256')||'확인 안 됨'));
+  }catch(e){transferMessage(e.message==='FILE_TOO_LARGE'?'원격 파일이 서버 설정 한도를 넘습니다.':e.message==='INVALID_PATH'?'경로가 작업 공간을 벗어나거나 유효하지 않습니다.':'다운로드 실패 · '+e.message,true);}
+  finally{transferBusy=false;$('upload-file').disabled=!selectedSession||!$('local-file').files?.[0]||!$('remote-path').value.trim();$('download-file').disabled=!selectedSession||!$('remote-path').value.trim();}
+});

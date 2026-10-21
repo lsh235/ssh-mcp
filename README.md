@@ -2,11 +2,11 @@
 
 VS Code의 Copilot이 원격 프로젝트를 읽고 수정하고, 같은 SSH 셸에서 명령과 테스트를 반복하도록 돕는 원격 MCP 서버입니다.
 
-**현재 상태: v0.7 구현. MCP 도구 20개와 여러 SSH 세션·브라우저 상태 화면을 제공하며, 감사 기록 전체 검증과 원격 workspace의 크기 제한 디렉터리 메타데이터 목록을 지원합니다. 실제 사용자 PC의 Copilot·VS Code Browser·외부 IdP·공개 HTTPS 배포는 미검증입니다.**
+**현재 상태: v0.8 구현. MCP 도구 20개, 여러 SSH 세션, 브라우저 상태 화면, 제한된 원격 workspace 파일 목록과 체크섬 검증 브라우저 파일 전송을 제공합니다. 실제 사용자 PC의 Copilot·VS Code Browser·외부 IdP·공개 HTTPS 배포는 미검증입니다.**
 
-VS Code Browser에서 현재 대화의 원격 작업을 보려면 [브라우저 세션 보기](docs/VSCODE_BROWSER.md)를 따릅니다. AI가 create_session_view로 이번 대화의 세션 ID만 묶어 링크를 만들고, 사용자가 브라우저에서 인증해 확인합니다. 별도 확장은 필요하지 않습니다. [v0.4 검증 결과](docs/V04_STATUS.md)를 참고하세요.
+VS Code Browser에서 현재 대화의 원격 작업을 보고 파일을 직접 옮기려면 [브라우저 세션 보기와 파일 전송](docs/VSCODE_BROWSER.md)을 따릅니다. AI가 create_session_view로 이번 대화의 세션 ID만 묶어 링크를 만들고, 사용자가 인증한 뒤 업로드 파일을 직접 선택하거나 원격 파일을 내려받습니다. 파일 바이트는 MCP 도구 결과나 AI 문맥으로 전달하지 않습니다. [v0.4 화면 설계](docs/V04_STATUS.md)와 [v0.8 전송 검증](docs/V08_STATUS.md)을 참고하세요.
 
-오픈소스의 유용한 기능을 계속 조사하고 이 프로젝트의 배치·보안 경계에 맞춰 이식하기 위한 기준은 [업스트림 기능 조사와 마이그레이션 절차](docs/UPSTREAM_MIGRATION.md)에 기록합니다. v0.7에서는 원격 디렉터리 목록을 항목·이름 바이트 상한 안에서 페이지 조회하고 파일 형식·크기·수정 시각·권한을 확인할 수 있습니다. 자세한 범위와 시험은 [v0.7 검증 결과](docs/V07_STATUS.md)를 참고하세요.
+오픈소스의 유용한 기능을 계속 조사하고 이 프로젝트의 배치·보안 경계에 맞춰 이식하기 위한 기준은 [업스트림 기능 조사와 마이그레이션 절차](docs/UPSTREAM_MIGRATION.md)에 기록합니다. v0.7의 bounded metadata listing에 더해 v0.8은 브라우저 A↔원격 MCP B↔SSH 대상 C 사이에 요청 ID·크기 상한·SHA-256·원격 원자적 생성으로 파일을 옮깁니다. 자세한 범위와 시험은 [v0.8 검증 결과](docs/V08_STATUS.md)를 참고하세요.
 
 추가 로그인 화면에 미리 준비한 값을 Enter와 함께 보내려면 [추가 로그인 설정](docs/LOGIN_SETUP.md)과 [설정 예시](examples/config.post-login.example.json)를 사용합니다. 비밀은 MCP 설치 PC의 전용 파일·환경변수에서 읽습니다. [v0.3 검증 결과](docs/V03_STATUS.md)를 참고하세요.
 
@@ -67,6 +67,7 @@ MCP를 설치하는 곳은 B입니다. C에는 기존 SSH 서버와 Bash·Python
 - [업스트림 기능 조사·마이그레이션 절차](docs/UPSTREAM_MIGRATION.md): 반복 조사 기준, 우선순위와 진행 중 기능 백로그
 - [v0.6 감사 로그 회전 검증](docs/V06_STATUS.md): 구간 연속성·복구·검증 결과와 한계
 - [v0.7 원격 파일 목록 검증](docs/V07_STATUS.md): bounded metadata listing과 symlink 경계
+- [v0.8 브라우저 파일 전송 검증](docs/V08_STATUS.md): 바이너리 업로드·다운로드, 체크섬, 충돌 거부와 인증 범위
 - [v0.5 감사 체인 검증](docs/V05_STATUS.md): 감사 로그 전환·검증·제한 사항
 - [대화형 구조도](docs/architecture.html): 연결 구조와 서버별 책임
 - [구조도 검증 기록](docs/DIAGRAM_QA.md): 문서 산출물 검증과 실제 제품 검증의 구분
