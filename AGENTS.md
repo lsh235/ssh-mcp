@@ -16,6 +16,8 @@ Secrets stay in private files, environment variables, or client secret prompts. 
 
 The server binds to loopback. Publish a remote endpoint through HTTPS with the configured hostname. Changing `host` to `0.0.0.0` is unsupported. The endpoint is `/mcp`, not `/sse`; this server is not a stdio process.
 
+Targets with an extra login screen after SSH authentication can use `postLogin`: follow [LOGIN_SETUP](docs/LOGIN_SETUP.md). Store values in B's private files or environment and configure literal expected prompts plus a final shell prompt. `open_session` performs the flow; never send gate secrets as MCP arguments. This is separate from SSH password/MFA authentication. Development commands remain non-PTY.
+
 ## Remote development loop
 
 1. Discover tools and `list_targets`; use returned target/workspace IDs.
@@ -37,7 +39,7 @@ For structural code exploration, use the installed `codebase-memory` skill when 
 - `npm ci` — install the locked dependencies (Node >=22.16, Linux).
 - `npm run build` — compile and copy runner assets.
 - `npm run smoke` — start the compiled server and verify health, authenticated discovery, and a tool call.
-- `npm run check` — build, unit tests, real isolated OpenSSH tests, and v0.2 integration tests; requires an executable `/usr/sbin/sshd` and fixture prerequisites in [OPERATIONS](docs/OPERATIONS.md).
+- `npm run check` — build, unit tests, real isolated OpenSSH tests, v0.2 integration tests, and post-login gate tests; requires an executable `/usr/sbin/sshd` and fixture prerequisites in [OPERATIONS](docs/OPERATIONS.md).
 - `npm run test:soak` — optional 121-second SSH test; report separately if not run.
 
 Preserve unrelated changes and existing test evidence. Never stage `.state/`, `node_modules/`, `dist/`, local config, or credentials. The Docker bridge writes request/response transcripts, which may include remote code and program output; keep new local transcripts private unless intentionally reviewed for publication.

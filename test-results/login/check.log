@@ -1,0 +1,202 @@
+
+> shell-mcp@0.3.0 check
+> npm run build && npm test && npm run test:ssh && npm run test:v02 && npm run test:login
+
+
+> shell-mcp@0.3.0 build
+> tsc && node scripts/copy-assets.mjs
+
+
+> shell-mcp@0.3.0 test
+> tsx --test --test-concurrency=1 test/*.test.ts
+
+TAP version 13
+# Subtest: OAuth validates audience, expiry, subject and scopes against signed tokens
+ok 1 - OAuth validates audience, expiry, subject and scopes against signed tokens
+  ---
+  duration_ms: 12.405326
+  type: 'test'
+  ...
+# Subtest: durable admission conflicts and restart recovery never replay uncertain jobs
+ok 2 - durable admission conflicts and restart recovery never replay uncertain jobs
+  ---
+  duration_ms: 19.894321
+  type: 'test'
+  ...
+# Subtest: config rejects non-loopback listeners and unsafe target aliases
+ok 3 - config rejects non-loopback listeners and unsafe target aliases
+  ---
+  duration_ms: 1.055376
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 167.276125
+
+> shell-mcp@0.3.0 test:ssh
+> tsx --test --test-concurrency=1 test/ssh.integration.ts
+
+TAP version 13
+# Subtest: real OpenSSH: persistent shell, patch/test loop, output, deduplication, failures and isolation
+ok 1 - real OpenSSH: persistent shell, patch/test loop, output, deduplication, failures and isolation
+  ---
+  duration_ms: 3769.637391
+  type: 'test'
+  ...
+# Subtest: multi-file patch reports a real partial filesystem failure
+ok 2 - multi-file patch reports a real partial filesystem failure
+  ---
+  duration_ms: 763.414068
+  type: 'test'
+  ...
+# Subtest: real HTTP MCP client: authentication, remote commands and reconnect without replay
+ok 3 - real HTTP MCP client: authentication, remote commands and reconnect without replay
+  ---
+  duration_ms: 2989.726997
+  type: 'test'
+  ...
+# Subtest: SSH transport loss is uncertain and host key checking cannot be bypassed
+ok 4 - SSH transport loss is uncertain and host key checking cannot be bypassed
+  ---
+  duration_ms: 2113.446089
+  type: 'test'
+  ...
+# Subtest: remote deadline and bounded output are explicit
+ok 5 - remote deadline and bounded output are explicit
+  ---
+  duration_ms: 1398.939335
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 11367.337156
+
+> shell-mcp@0.3.0 test:v02
+> tsx --test --test-concurrency=1 test/features.integration.ts
+
+TAP version 13
+# Subtest: pipe stdin: progressive input, duplicate safety, EOF and persistent Bash state
+ok 1 - pipe stdin: progressive input, duplicate safety, EOF and persistent Bash state
+  ---
+  duration_ms: 3644.698421
+  type: 'test'
+  ...
+# Subtest: worker exit in pipe mode does not leave its stdin feeder running
+ok 2 - worker exit in pipe mode does not leave its stdin feeder running
+  ---
+  duration_ms: 1259.299096
+  type: 'test'
+  ...
+# Subtest: input caps and cancel/reopen create a fresh generation without replay
+ok 3 - input caps and cancel/reopen create a fresh generation without replay
+  ---
+  duration_ms: 1254.975556
+  type: 'test'
+  ...
+# Subtest: bounded literal search and stable history pages include scope checks
+ok 4 - bounded literal search and stable history pages include scope checks
+  ---
+  duration_ms: 977.794558
+  type: 'test'
+  ...
+# Subtest: lost input acknowledgement never automatically publishes a duplicate
+ok 5 - lost input acknowledgement never automatically publishes a duplicate
+  ---
+  duration_ms: 809.700587
+  type: 'test'
+  ...
+# Subtest: HTTP MCP exposes and executes all five new tools
+ok 6 - HTTP MCP exposes and executes all five new tools
+  ---
+  duration_ms: 1216.933359
+  type: 'test'
+  ...
+1..6
+# tests 6
+# suites 0
+# pass 6
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 9445.772079
+
+> shell-mcp@0.3.0 test:login
+> tsx --test --test-concurrency=1 test/login.integration.ts
+
+TAP version 13
+# Subtest: post-SSH gate: two prompt inputs, same-channel files/git/commands, stdin and persistent state
+ok 1 - post-SSH gate: two prompt inputs, same-channel files/git/commands, stdin and persistent state
+  ---
+  duration_ms: 2259.102264
+  type: 'test'
+  ...
+# Subtest: unmatched gate prompt times out without sending later input or exposing banners
+ok 2 - unmatched gate prompt times out without sending later input or exposing banners
+  ---
+  duration_ms: 605.002832
+  type: 'test'
+  ...
+# Subtest: secret references reject inline values, missing env, public/symlink/multiline files and controls
+ok 3 - secret references reject inline values, missing env, public/symlink/multiline files and controls
+  ---
+  duration_ms: 310.485418
+  type: 'test'
+  ...
+# Subtest: actual HTTP MCP gate cancellation confirms termination; reopen logs in again
+ok 4 - actual HTTP MCP gate cancellation confirms termination; reopen logs in again
+  ---
+  duration_ms: 1478.417649
+  type: 'test'
+  ...
+# Subtest: wrong gate value fails closed and cannot start helpers or leak echoed values
+ok 5 - wrong gate value fails closed and cannot start helpers or leak echoed values
+  ---
+  duration_ms: 543.067563
+  type: 'test'
+  ...
+# Subtest: master disconnect makes gate command unknown and terminates its remote worker group
+ok 6 - master disconnect makes gate command unknown and terminates its remote worker group
+  ---
+  duration_ms: 968.520872
+  type: 'test'
+  ...
+# Subtest: gate helper output limits and deadlines remain enforced on the shared channel
+ok 7 - gate helper output limits and deadlines remain enforced on the shared channel
+  ---
+  duration_ms: 991.681493
+  type: 'test'
+  ...
+# Subtest: gate target and ordinary SSH target remain independent in one MCP service
+ok 8 - gate target and ordinary SSH target remain independent in one MCP service
+  ---
+  duration_ms: 1707.231433
+  type: 'test'
+  ...
+# Subtest: login values alone cannot bypass the explicit shell-ready check
+ok 9 - login values alone cannot bypass the explicit shell-ready check
+  ---
+  duration_ms: 691.426814
+  type: 'test'
+  ...
+1..9
+# tests 9
+# suites 0
+# pass 9
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 9875.641944

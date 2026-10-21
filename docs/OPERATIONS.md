@@ -1,13 +1,13 @@
 # 설치·연결·운영
 
-Shell MCP 0.2.0은 원격 MCP 설치 PC(B)에서 실행합니다. B의 SSH 인증정보로 작업 대상 PC(C)에 접속합니다. Tabby 앱이나 기존 Tabby MCP 플러그인을 실행할 필요는 없습니다. 새 입력·검색·이력·세션 도구는 [v0.2 사용법](V02_USAGE.md)을 참고하세요.
+Shell MCP 0.3.0은 원격 MCP 설치 PC(B)에서 실행합니다. B의 SSH 인증정보로 작업 대상 PC(C)에 접속합니다. Tabby 앱이나 기존 Tabby MCP 플러그인을 실행할 필요는 없습니다. 입력·검색·이력·세션 도구는 [v0.2 사용법](V02_USAGE.md), SSH 접속 후 추가 로그인은 [LOGIN_SETUP](LOGIN_SETUP.md)을 참고하세요.
 
 ## 준비
 
 - B: Linux, Node.js 22.16 이상, npm, OpenSSH 클라이언트. 검증 환경은 Node.js 22.23.2입니다.
 - C: Linux, OpenSSH 서버, Bash, **Python 3.9 이상**, util-linux `setsid --wait`, `mkfifo`, 필요 빌드 도구.
 - B의 서비스 계정에서 `ssh dev-linux` 접속이 이미 준비되어 있어야 합니다. known_hosts에 신뢰할 host key를 사전 등록하고, agent 또는 키를 준비합니다.
-- 비밀번호·MFA 인증·PTY는 지원하지 않습니다. 기본 stdin은 `/dev/null`이며, 일반 stdin 프로그램에는 v0.2의 inputMode=pipe / send_input을 사용할 수 있습니다.
+- SSH 자체 비밀번호·MFA 인증과 일반 PTY 명령은 지원하지 않습니다. SSH 접속 후 추가 로그인에는 postLogin 설정을 사용할 수 있습니다(최종 셸에 stty 필요). 기본 stdin은 `/dev/null`이며 일반 stdin 프로그램에는 inputMode=pipe / send_input을 사용합니다.
 - 상주 서비스는 B에만 설치합니다. C의 `/tmp/shell-mcp-*`에 세션 전용 도우미·FIFO·로그가 생기고, 정상 완료한 명령 파일과 닫힌 세션 파일은 정리됩니다.
 
 ## 빌드

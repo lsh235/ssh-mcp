@@ -9,6 +9,27 @@ cd -- "$__sm_root" || exit 71
 exec 3<&0
 exec </dev/null
 "$__sm_python" -c 'import json,os,sys; p=int(sys.argv[1]); json.dump({"pid":p,"start":open("/proc/%s/stat"%p).read().rsplit(")",1)[1].split()[19]},open(sys.argv[2],"w"))' "$$" "$__sm_dir/identity"
+if [[ -n ${4-} ]]; then
+  # Gateway agent and worker are different sessions. Reap the managed group even
+  # if the agent is killed before its Python finally block can run.
+  "$__sm_python" -c 'import json,os,pathlib,signal,sys,time
+parent,start,identity=sys.argv[1:4]; worker=json.load(open(identity))
+def state(pid):
+ try:
+  parts=pathlib.Path("/proc",str(pid),"stat").read_text().rsplit(")",1)[1].split()
+  return parts[0],parts[19]
+ except (FileNotFoundError,ProcessLookupError): return None,None
+while True:
+ ws,wt=state(worker["pid"])
+ if wt!=worker["start"] or ws=="Z": break
+ ps,pt=state(parent)
+ if pt!=start or ps=="Z":
+  try: os.killpg(worker["pid"],signal.SIGKILL)
+  except ProcessLookupError: pass
+  break
+ time.sleep(.1)
+' "$4" "$5" "$__sm_dir/identity" >/dev/null 2>&1 &
+fi
 printf 'SHELL_MCP_READY\n'
 while IFS= read -r __sm_id <&3; do
   [[ $__sm_id =~ ^c_[a-f0-9-]+$ ]] || exit 72

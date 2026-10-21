@@ -1,6 +1,6 @@
 {
   "name": "shell-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Remote MCP development server with persistent OpenSSH shells",
@@ -12,10 +12,11 @@
     "start": "node dist/cli.js",
     "test": "tsx --test --test-concurrency=1 test/*.test.ts",
     "test:ssh": "tsx --test --test-concurrency=1 test/ssh.integration.ts",
-    "check": "npm run build && npm test && npm run test:ssh && npm run test:v02",
+    "check": "npm run build && npm test && npm run test:ssh && npm run test:v02 && npm run test:login",
     "smoke": "node scripts/smoke.mjs",
     "test:soak": "tsx --test test/soak.integration.ts",
-    "test:v02": "tsx --test --test-concurrency=1 test/features.integration.ts"
+    "test:v02": "tsx --test --test-concurrency=1 test/features.integration.ts",
+    "test:login": "tsx --test --test-concurrency=1 test/login.integration.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.3.1",

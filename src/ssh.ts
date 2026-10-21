@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Target } from './config.js';
 import { assert, Fault, quote, sleep } from './core.js';
+import { GatewayChannel, loginValues } from './gateway.js';
 
 const helper = readFileSync(new URL('./runner/files.py', import.meta.url), 'utf8');
 const worker = readFileSync(new URL('./runner/worker.sh', import.meta.url), 'utf8');
@@ -19,16 +20,17 @@ export class SSHConnection {
   private alive = false;
   private diagnostics = '';
   private closeJob?: Promise<void>;
+  private gateway?:GatewayChannel;
   remoteDir = '';
   root = '';
   onLost: (reason: string) => void = () => {};
   constructor(private target: Target, private maximum: number) { chmodSync(this.localDir, 0o700); }
-  private args(multiplex: boolean): string[] {
+  private args(multiplex: boolean,terminal=false): string[] {
     return [
       ...(this.target.sshConfig ? ['-F', this.target.sshConfig] : []),
       '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ForwardAgent=no',
       '-o', 'ForwardX11=no', '-o', 'ClearAllForwardings=yes', '-o', 'RemoteCommand=none',
-      '-o', 'RequestTTY=no', '-o', 'ConnectTimeout=10', '-o', 'ConnectionAttempts=1',
+      '-e', 'none', '-o', terminal?'RequestTTY=force':'RequestTTY=no', '-o', 'ConnectTimeout=10', '-o', 'ConnectionAttempts=1',
       '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3',
       '-S', this.socket,
       ...(multiplex ? ['-o', 'ControlMaster=no', '-o', 'ProxyCommand=false', '-o', 'ProxyJump=none'] : ['-M', '-N', '-o', 'ControlMaster=yes', '-o', 'ControlPersist=no']),
@@ -37,6 +39,8 @@ export class SSHConnection {
   }
   private lost(reason: string) { if (this.alive) { this.alive = false; this.onLost(reason); } }
   async open(root: string) {
+    // Fail before any connection/input if a configured secret cannot be resolved.
+    const values=this.target.postLogin?loginValues(this.target.postLogin):[];
     this.master = spawn('ssh', this.args(false));
     this.master.on('error', () => this.lost('SSH_START_FAILED'));
     this.master.stderr.on('data', b => { this.diagnostics = (this.diagnostics + b.toString()).slice(-4096); });
@@ -51,8 +55,14 @@ export class SSHConnection {
     }
     this.alive = true;
     try {
+      if(this.target.postLogin){
+        this.shell=spawn('ssh',this.args(true,true));
+        this.gateway=new GatewayChannel(this.shell,reason=>this.lost(reason));
+        await this.gateway.open(this.target.postLogin,values);
+      }
       const ready = await this.helper<{dir: string; root: string}>({op: 'prepare', root});
       this.remoteDir = ready.dir; this.root = ready.root;
+      if(this.gateway){await this.gateway.start(worker,this.remoteDir,this.root,this.maximum);return;}
       const remote = `exec setsid --wait bash --noprofile --norc -c ${quote(worker)} -- ${quote(this.remoteDir)} ${quote(this.root)} ${this.maximum}`;
       this.shell = spawn('ssh', [...this.args(true), remote]);
       const shell = this.shell;
@@ -73,6 +83,7 @@ export class SSHConnection {
   }
   async exec(command: string, input = '', maximum = 2097152, timeout = 15000): Promise<{stdout: string; stderr: string; code: number}> {
     assert(this.alive && existsSync(this.socket), 'SSH_DISCONNECTED', 'SSH connection is no longer available');
+    if(this.gateway)return this.gateway.exec(command,input,maximum,timeout);
     return new Promise((resolve, reject) => {
       const child = spawn('ssh', [...this.args(true), command]);
       const out: Buffer[] = [], err: Buffer[] = []; let bytes = 0; let settled = false;
@@ -101,7 +112,8 @@ export class SSHConnection {
   async submit(commandId: string, command: string, inputMode:'closed'|'pipe'='closed') {
     await this.helper({op: 'write_command', commandId, content: Buffer.from(command).toString('base64'),inputMode});
     assert(this.alive && this.shell, 'SSH_DISCONNECTED', 'Persistent shell is unavailable');
-    this.shell.stdin.write(commandId + '\n');
+    if(this.gateway)await this.gateway.submit(commandId);
+    else this.shell.stdin.write(commandId + '\n');
   }
   poll(commandId: string, offsets: Record<string, number>) {
     return this.helper<PollResult>({op:'poll', commandId, maximum:this.maximum, offsets});
@@ -121,7 +133,7 @@ export class SSHConnection {
       await this.helper({op:'cleanup'}).catch(() => {});
       this.alive = false;
     }
-    this.shell?.stdin.end(); this.shell?.kill(); this.master?.kill();
+    this.gateway?.close();this.shell?.stdin.end(); this.shell?.kill(); this.master?.kill();
     rmSync(this.localDir, { recursive:true, force:true });
   }
 }

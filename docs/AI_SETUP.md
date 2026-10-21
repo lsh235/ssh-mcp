@@ -14,6 +14,8 @@ C: 실제 프로젝트 PC / 기존 SSH 서버와 프로젝트
 
 이미 MCP가 연결되어 있다면 5절부터 진행합니다. 서버 설치가 필요하면 B에서 2~3절을, 클라이언트 연결은 A에서 4절을 진행합니다. A에 B의 서버를 중복 기동하지 않습니다. B와 C가 같더라도 현재 구현은 SSH로 접속하므로 SSH 대상 설정이 필요합니다.
 
+SSH 인증 성공 뒤 추가 로그인 화면이 있다면 [LOGIN_SETUP](LOGIN_SETUP.md)의 대상별 postLogin 설정을 먼저 준비합니다. 값은 B의 비공개 파일·환경변수에 두고, 실제 안내 문구와 최종 셸 프롬프트를 설정합니다. 아래의 `ssh ... command` 사전 점검은 게이트에 막힐 수 있으므로 해당 대상은 postLogin 설정 후 실제 open_session과 읽기 도구로 확인합니다.
+
 | 확인할 값 | 확인 방법 / 예시 |
 | --- | --- |
 | 현재 실행 위치 | 현재 PC가 A/B/C 중 어디인지, 사용 가능한 원격 실행 경로 확인 |
@@ -62,7 +64,7 @@ ssh -o BatchMode=yes -o StrictHostKeyChecking=yes dev-linux \
   'command -v bash && python3 -c "import sys; assert sys.version_info >= (3, 9)" && command -v mkfifo && setsid --wait true && test -d /srv/projects/sample && test -w /srv/projects/sample'
 ```
 
-출력과 종료 코드를 모두 확인합니다. 비밀번호·MFA 대화나 PTY가 필요한 인증은 현재 지원하지 않습니다. SSH 실패를 MCP 설정 변경으로 우회하지 않습니다.
+출력과 종료 코드를 모두 확인합니다. SSH 자체의 비밀번호·MFA 대화 인증은 현재 지원하지 않습니다. SSH 실패를 MCP 설정 변경으로 우회하지 않습니다. SSH 인증 이후 추가 로그인은 postLogin의 별도 흐름을 사용합니다.
 
 ## 3. B 서버 설정과 기동
 

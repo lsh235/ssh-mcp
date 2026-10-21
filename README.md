@@ -2,7 +2,9 @@
 
 VS Code의 Copilot이 원격 프로젝트를 읽고 수정하고, 같은 SSH 셸에서 명령과 테스트를 반복하도록 돕는 원격 MCP 서버입니다.
 
-**현재 상태: v0.2 구현. MCP 도구 19개, 로컬 OpenSSH·HTTP MCP와 Docker 대상 검증. 실제 사용자 PC의 Copilot·외부 IdP·공개 HTTPS 배포는 미검증입니다.**
+**현재 상태: v0.3 구현. MCP 도구 19개, 대상별 SSH 후 추가 로그인 입력 지원. 실제 사용자 PC의 Copilot·외부 IdP·공개 HTTPS 배포는 미검증입니다.**
+
+추가 로그인 화면에 미리 준비한 값을 Enter와 함께 보내려면 [추가 로그인 설정](docs/LOGIN_SETUP.md)과 [설정 예시](examples/config.post-login.example.json)를 사용합니다. 비밀은 MCP 설치 PC의 전용 파일·환경변수에서 읽습니다. [v0.3 검증 결과](docs/V03_STATUS.md)를 참고하세요.
 
 v0.2에는 실행 중 stdin 입력/EOF, 명령 완료 대기, 원격 코드 검색, 명령 이력, 종료된 세션의 새 세대 열기를 추가했습니다. [추가 기능 사용법](docs/V02_USAGE.md)과 [v0.2 검증 결과](docs/V02_STATUS.md)를 확인하세요.
 

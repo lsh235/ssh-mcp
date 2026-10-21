@@ -1,0 +1,13 @@
+{
+  "status": "PASS",
+  "version": "0.3.0",
+  "runtime": "compiled dist/server.js",
+  "transport": "actual authenticated HTTP MCP",
+  "ssh": "actual isolated sshd with post-authentication ForceCommand gate",
+  "loginInputs": 2,
+  "toolCount": 19,
+  "mcpToolCalls": 7,
+  "persistentState": true,
+  "noRemoteExecChannelBypass": true,
+  "syntheticCredentialsOnly": true
+}

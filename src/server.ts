@@ -23,7 +23,7 @@ export function createApp(config:Config) {
     if(origin&&!config.allowedOrigins.includes(origin)){res.status(403).json({error:'ORIGIN_FORBIDDEN'});return;}
     res.set('Cache-Control','no-store');next();
   });
-  app.get('/health',(_req,res)=>res.json({status:'ok',version:'0.2.0'}));
+  app.get('/health',(_req,res)=>res.json({status:'ok',version:'0.3.0'}));
   for(const path of ['/.well-known/oauth-protected-resource','/.well-known/oauth-protected-resource/mcp'])app.get(path,(_req,res)=>{
     if(config.auth.mode!=='oauth'){res.sendStatus(404);return;}res.json(auth.metadata());
   });

@@ -1,0 +1,9 @@
+{
+  "commit": "12d82190ebbf5ce69df4408007187c3ef3b0ec3c",
+  "sha256": {
+    "src/config.ts": "fc5708994bd88b2a98638433ed481a165be8fb8345071e6edf4b468020419d37",
+    "src/ssh.ts": "3ccbd68fcca45467187154c8d43413ce0e1093426df40efb603d0e2ee7ddb76d",
+    "package.json": "ba7f2cd69a2a4a778491d8c098ee43131a4c1392a098a64101c8ecf151affc4e",
+    "package-lock.json": "7fd8af963b7e2e4318471bae2483cdc870c7dc9aff83385201d23541374ceb5b"
+  }
+}

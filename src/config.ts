@@ -3,6 +3,17 @@ import { resolve } from 'node:path';
 import { z } from 'zod';
 const httpsUrl = z.url().refine(v => new URL(v).protocol === 'https:', 'HTTPS required');
 const identifier = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}$/);
+const prompt = z.string().min(1).max(256);
+const valueSource = z.union([
+  z.object({env:z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)}).strict(),
+  z.object({file:z.string().startsWith('/')}).strict()
+]);
+const postLogin = z.object({
+  steps:z.array(z.object({expect:prompt,valueFrom:valueSource}).strict()).min(1).max(8),
+  ready:prompt,
+  lineEnding:z.enum(['lf','cr','crlf']).default('lf'),
+  timeoutMs:z.number().int().min(100).max(30000).default(10000)
+}).strict();
 export const configSchema = z.object({
   host: z.string().default('127.0.0.1'), port: z.number().int().min(0).max(65535).default(8787),
   publicUrl: z.url().default('http://127.0.0.1:8787/mcp'),
@@ -28,6 +39,7 @@ export const configSchema = z.object({
     description: z.string().default('SSH development target'),
     sshAlias: identifier,
     sshConfig: z.string().optional(),
+    postLogin: postLogin.optional(),
     principals: z.array(z.string().min(1)).min(1),
     workspaces: z.record(identifier, z.string().startsWith('/')).refine(v => Object.keys(v).length > 0)
   }))
