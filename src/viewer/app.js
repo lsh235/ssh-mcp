@@ -1,7 +1,8 @@
 const $=id=>document.getElementById(id);
 const names={ready:'대기 중',busy:'실행 중',opening:'연결 중',closed:'종료',broken:'연결 끊김',accepted:'접수',running:'실행 중',completed:'완료',unknown:'확인 불가',cancelled:'취소됨',timed_out:'시간 초과',cancel_requested:'취소 중'};
 let token='',viewId='',selectedSession='',selectedCommand='',commands=[],generation=0,busy=false,outputBusy=false;
-let streams,sessionKey='',commandKey='',maxTransferBytes=67108864,transferBusy=false,uploadIdentity='',uploadRequestId='';
+let streams,sessionKey='',commandKey='',maxTransferBytes=67108864,transferBusy=false,uploadIdentity='',uploadRequestId='',uploadPhase='idle',uploadCancelRequested=false,cancelPending=false;
+const resumableUploadErrors=new Set(['TRANSFER_UNKNOWN','TRANSFER_IN_PROGRESS','TRANSFER_OFFSET','TRANSFER_INCOMPLETE','TRANSFER_TIMEOUT','UPLOAD_WRITE_FAILED','SESSION_BUSY','SESSION_UNAVAILABLE','NETWORK_ERROR','NETWORK_TIMEOUT','UNAUTHENTICATED','RESOURCE_LIMIT']);
 function resetStreams(){streams=Object.fromEntries(['stdout','stderr'].map(s=>[s,{cursor:0,text:'',decoder:new TextDecoder(),trimmed:false}]));for(const s of ['stdout','stderr']){$(s).textContent='';$(s+'-position').textContent='';}$('output-note').textContent='';}
 resetStreams();
 function error(message){$('error').textContent=message;$('error').hidden=!message;}
@@ -21,41 +22,71 @@ $('refresh').addEventListener('click',refresh);$('more-output').addEventListener
 
 function formatBytes(value){if(value<1024)return value+' B';const units=['KiB','MiB','GiB'];let size=value/1024,index=0;while(size>=1024&&index<units.length-1){size/=1024;index++;}return size.toFixed(size>=10?0:1)+' '+units[index];}
 function transferMessage(message,isError=false){const node=$('transfer-note');node.textContent=message;node.classList.toggle('bad',isError);}
+function updateCancelButton(){const button=$('cancel-upload'),canCancel=transferBusy&&['hashing','staging'].includes(uploadPhase),canRetry=cancelPending&&!transferBusy,canceling=cancelPending&&transferBusy&&uploadPhase==='canceling';button.hidden=!(canCancel||canRetry||canceling);button.disabled=uploadCancelRequested||uploadPhase==='canceling'||!token;button.textContent=cancelPending?'취소 재시도':'업로드 취소';}
 function filesUrl(path,requestId){const query=new URLSearchParams({path});if(requestId)query.set('requestId',requestId);return '/viewer-api/views/'+encodeURIComponent(viewId)+'/sessions/'+encodeURIComponent(selectedSession)+'/files?'+query;}
+function uploadUrl(path,requestId,complete=false){const query=new URLSearchParams({path,requestId});return '/viewer-api/views/'+encodeURIComponent(viewId)+'/sessions/'+encodeURIComponent(selectedSession)+'/uploads'+(complete?'/complete':'')+'?'+query;}
 function downloadName(response,path){const value=response.headers.get('content-disposition')||'';const match=value.match(/filename\*=UTF-8''([^;]+)/i);if(match){try{return decodeURIComponent(match[1]);}catch{}}return path.split('/').filter(Boolean).at(-1)||'download';}
 async function uploadStorageKey(file,path){const identity=JSON.stringify([viewId,selectedSession,path,file.name,file.size,file.lastModified]);const bytes=new TextEncoder().encode(identity);const digest=await crypto.subtle.digest('SHA-256',bytes);return 'shell-mcp-upload:'+Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');}
+async function uploadChunkHashes(file){const hashes=[];for(let offset=0;offset<file.size;offset+=1048576){if(uploadCancelRequested)throw Object.assign(new Error('UPLOAD_CANCELLED'),{code:'UPLOAD_CANCELLED'});const bytes=await file.slice(offset,Math.min(file.size,offset+1048576)).arrayBuffer();const digest=await crypto.subtle.digest('SHA-256',bytes);hashes.push(Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join(''));}return hashes;}
+function sendUploadChunk(url,offset,chunk,onProgress){return new Promise((resolve,reject)=>{const xhr=new XMLHttpRequest();xhr.open('PATCH',url);xhr.setRequestHeader('Authorization','Bearer '+token);xhr.setRequestHeader('Content-Type','application/offset+octet-stream');xhr.setRequestHeader('Upload-Offset',String(offset));xhr.timeout=1800000;xhr.upload.onprogress=event=>{if(event.lengthComputable)onProgress(event.loaded);};xhr.onload=()=>{if(xhr.status===204){const next=Number(xhr.getResponseHeader('Upload-Offset'));if(Number.isSafeInteger(next)&&next>offset)resolve(next);else reject(Object.assign(new Error('TRANSFER_OFFSET'),{code:'TRANSFER_OFFSET'}));return;}let code='TRANSFER_FAILED';try{code=JSON.parse(xhr.responseText).error?.code||code;}catch{}reject(Object.assign(new Error(code),{code}));};xhr.onerror=()=>reject(Object.assign(new Error('NETWORK_ERROR'),{code:'NETWORK_ERROR'}));xhr.ontimeout=()=>reject(Object.assign(new Error('NETWORK_TIMEOUT'),{code:'NETWORK_TIMEOUT'}));xhr.send(chunk);});}
+async function postUpload(url,body){const response=await fetch(url,{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(body),cache:'no-store',credentials:'omit',redirect:'error'});let result={};try{result=await response.json();}catch{}if(!response.ok)throw Object.assign(new Error(result.error?.code||'TRANSFER_FAILED'),{code:result.error?.code||'TRANSFER_FAILED'});return result;}
+async function deleteUpload(url){for(let attempt=0;attempt<6;attempt++){const response=await fetch(url,{method:'DELETE',headers:{Authorization:'Bearer '+token},cache:'no-store',credentials:'omit',redirect:'error'});if(response.status===204)return;let code='TRANSFER_FAILED';try{code=(await response.json()).error?.code||code;}catch{}if(code==='TRANSFER_IN_PROGRESS'&&attempt<5){await new Promise(resolve=>setTimeout(resolve,150*(attempt+1)));continue;}throw Object.assign(new Error(code),{code});}}
 function savedUploadRequest(key){try{const value=sessionStorage.getItem(key);return value&&/^[a-f0-9-]{36}$/.test(value)?value:'';}catch{return '';}}
 function rememberUploadRequest(key,id){try{sessionStorage.setItem(key,id);}catch{}}
 function forgetUploadRequest(key){try{sessionStorage.removeItem(key);}catch{}}
+$('cancel-upload').addEventListener('click',async()=>{
+  if(transferBusy){if(!['hashing','staging'].includes(uploadPhase))return;uploadCancelRequested=true;updateCancelButton();transferMessage('현재 청크 확인 뒤 MCP 호스트 staging을 취소합니다…');return;}
+  const file=$('local-file').files?.[0],path=$('remote-path').value.trim();if(!cancelPending||!file||!path||!selectedSession||!token)return;
+  transferBusy=true;uploadPhase='canceling';$('upload-file').disabled=true;$('download-file').disabled=true;$('remote-path').disabled=true;$('local-file').disabled=true;$('logout').disabled=true;updateCancelButton();
+  try{const key=await uploadStorageKey(file,path),requestId=savedUploadRequest(key);if(requestId)await deleteUpload(uploadUrl(path,requestId));forgetUploadRequest(key);uploadIdentity='';uploadRequestId='';cancelPending=false;transferMessage('업로드 취소를 확인하고 MCP 호스트의 미완성 staging을 삭제했습니다.');}
+  catch(e){cancelPending=true;transferMessage('취소 여부를 확인하지 못했습니다. 취소 재시도를 눌러 다시 확인하세요 · '+(e.code||e.message),true);}
+  finally{transferBusy=false;uploadPhase='idle';$('remote-path').disabled=false;$('local-file').disabled=false;$('logout').disabled=false;$('upload-file').disabled=!selectedSession||!$('local-file').files?.[0]||!$('remote-path').value.trim();$('download-file').disabled=!selectedSession||!$('remote-path').value.trim();updateCancelButton();}
+});
+$('session-list').addEventListener('click',event=>{if(transferBusy){event.preventDefault();event.stopImmediatePropagation();transferMessage('파일 전송 중에는 SSH 세션을 바꿀 수 없습니다.');}},true);
 $('remote-path').addEventListener('input',()=>{const file=$('local-file').files?.[0];$('download-file').disabled=!selectedSession||!$('remote-path').value.trim()||transferBusy;$('upload-file').disabled=!selectedSession||!file||!$('remote-path').value.trim()||transferBusy;});
-$('local-file').addEventListener('change',()=>{const file=$('local-file').files?.[0];if(file&&!$('remote-path').value.trim())$('remote-path').value=file.name;uploadIdentity='';uploadRequestId='';$('upload-file').disabled=!selectedSession||!file||!$('remote-path').value.trim()||transferBusy;});
-$('session-list').addEventListener('click',()=>{uploadIdentity='';uploadRequestId='';$('local-file').value='';$('remote-path').value='';$('upload-file').disabled=true;$('download-file').disabled=true;transferMessage('작업 공간 기준 상대 경로를 입력하세요.');});
-$('logout').addEventListener('click',()=>{uploadIdentity='';uploadRequestId='';$('local-file').value='';$('remote-path').value='';transferMessage('다시 연결하면 파일 전송을 사용할 수 있습니다.');});
+$('local-file').addEventListener('change',()=>{const file=$('local-file').files?.[0];if(file&&!$('remote-path').value.trim())$('remote-path').value=file.name;uploadIdentity='';uploadRequestId='';cancelPending=false;$('upload-file').disabled=!selectedSession||!file||!$('remote-path').value.trim()||transferBusy;updateCancelButton();});
+$('session-list').addEventListener('click',()=>{uploadIdentity='';uploadRequestId='';cancelPending=false;$('local-file').value='';$('remote-path').value='';$('upload-file').disabled=true;$('download-file').disabled=true;transferMessage('작업 공간 기준 상대 경로를 입력하세요.');updateCancelButton();});
+$('logout').addEventListener('click',()=>{uploadIdentity='';uploadRequestId='';cancelPending=false;$('local-file').value='';$('remote-path').value='';transferMessage('다시 연결하면 파일 전송을 사용할 수 있습니다.');updateCancelButton();});
 $('upload-file').addEventListener('click',async()=>{
   if(transferBusy||!selectedSession||!token)return;
   const file=$('local-file').files?.[0],path=$('remote-path').value.trim();if(!file||!path)return;
   if(file.size>maxTransferBytes){transferMessage('파일이 서버 설정 한도 '+formatBytes(maxTransferBytes)+'를 넘습니다.',true);return;}
-  transferBusy=true;$('upload-file').disabled=true;$('download-file').disabled=true;
+  transferBusy=true;uploadPhase='hashing';uploadCancelRequested=false;cancelPending=false;$('upload-file').disabled=true;$('download-file').disabled=true;$('remote-path').disabled=true;$('local-file').disabled=true;$('logout').disabled=true;updateCancelButton();let storageKey='',requestId='',url='';
   try{
-  const identity=await uploadStorageKey(file,path);
-  if(identity!==uploadIdentity){uploadIdentity=identity;uploadRequestId=savedUploadRequest(identity)||crypto.randomUUID();rememberUploadRequest(identity,uploadRequestId);}
-  const requestId=uploadRequestId,xhr=new XMLHttpRequest();xhr.open('PUT',filesUrl(path,requestId));xhr.setRequestHeader('Authorization','Bearer '+token);xhr.setRequestHeader('Content-Type','application/octet-stream');xhr.timeout=1800000;
-  xhr.upload.onprogress=event=>{if(event.lengthComputable)transferMessage('업로드 중 · '+formatBytes(event.loaded)+' / '+formatBytes(event.total));};
-  xhr.onload=()=>{let body={};try{body=JSON.parse(xhr.responseText);}catch{}if(xhr.status>=200&&xhr.status<300&&body.result?.state==='completed'){forgetUploadRequest(identity);transferMessage('업로드 완료 · '+formatBytes(body.result.bytes)+' · SHA-256 '+body.result.sha256);uploadIdentity='';uploadRequestId='';$('local-file').value='';}else{const code=body.error?.code||'TRANSFER_FAILED';if(!['TRANSFER_UNKNOWN','TRANSFER_IN_PROGRESS','SESSION_BUSY','SESSION_UNAVAILABLE'].includes(code))forgetUploadRequest(identity);const message=code==='FILE_EXISTS'?'원격 경로에 파일이 이미 있습니다. 기존 파일은 덮어쓰지 않았습니다.':code==='TRANSFER_UNKNOWN'||code==='TRANSFER_IN_PROGRESS'?'SSH 세션이 유지 중이면 같은 파일·경로를 다시 선택해 이어갈 수 있습니다. 새로고침 후에는 토큰을 다시 입력하고 파일을 재선택하세요.':code==='FILE_TOO_LARGE'?'파일이 서버 설정 한도를 넘습니다.':code==='INVALID_PATH'?'경로가 작업 공간을 벗어나거나 유효하지 않습니다.':'업로드 실패 · '+code;transferMessage(message,true);}};
-  xhr.onerror=()=>transferMessage('연결이 끊겼습니다. 같은 파일·경로를 다시 선택하면 확인된 원격 부분부터 이어갑니다(SSH 세션이 유지된 경우).',true);
-  xhr.ontimeout=()=>transferMessage('응답 시간이 초과됐습니다. SSH 세션이 유지 중이면 같은 파일·경로로 다시 업로드해 이어갈 수 있습니다.',true);
-  xhr.onloadend=()=>{transferBusy=false;$('upload-file').disabled=!selectedSession||!$('local-file').files?.[0]||!$('remote-path').value.trim();$('download-file').disabled=!selectedSession||!$('remote-path').value.trim();};
-  transferMessage('업로드 준비 중…');xhr.send(file);
-  }catch{transferBusy=false;$('upload-file').disabled=!selectedSession||!$('local-file').files?.[0]||!$('remote-path').value.trim();transferMessage('업로드 요청을 준비하지 못했습니다.',true);}
+  storageKey=await uploadStorageKey(file,path);
+  if(storageKey!==uploadIdentity){uploadIdentity=storageKey;uploadRequestId=savedUploadRequest(storageKey)||crypto.randomUUID();rememberUploadRequest(storageKey,uploadRequestId);}
+  requestId=uploadRequestId;url=uploadUrl(path,requestId);
+  const chunks=await uploadChunkHashes(file);if(uploadCancelRequested)throw Object.assign(new Error('UPLOAD_CANCELLED'),{code:'UPLOAD_CANCELLED'});
+  transferMessage('파일 조각을 확인하고 있습니다…');
+  let state=await postUpload(url,{path,requestId,size:file.size,chunks});
+  if(state.complete&&state.result?.state==='completed'){
+    forgetUploadRequest(storageKey);transferMessage('업로드 완료 · '+formatBytes(state.result.bytes)+' · SHA-256 '+state.result.sha256);uploadIdentity='';uploadRequestId='';$('local-file').value='';return;
+  }
+  uploadPhase='staging';updateCancelButton();
+  let offset=state.offset;transferMessage('MCP 호스트가 확인한 위치 · '+formatBytes(offset)+' / '+formatBytes(file.size));
+  while(offset<file.size){
+    if(uploadCancelRequested)throw Object.assign(new Error('UPLOAD_CANCELLED'),{code:'UPLOAD_CANCELLED'});
+    const end=Math.min(file.size,offset+1048576),part=file.slice(offset,end),base=offset;
+    transferMessage('호스트로 전송 중 · '+formatBytes(base)+' / '+formatBytes(file.size));
+    offset=await sendUploadChunk(url,base,part,sent=>transferMessage('호스트로 전송 중 · '+formatBytes(base+sent)+' / '+formatBytes(file.size)));
+    transferMessage('MCP 호스트가 확인한 위치 · '+formatBytes(offset)+' / '+formatBytes(file.size));
+  }
+  if(uploadCancelRequested)throw Object.assign(new Error('UPLOAD_CANCELLED'),{code:'UPLOAD_CANCELLED'});
+  uploadPhase='publishing';updateCancelButton();transferMessage('SSH 대상에 반영하는 중…');
+  state=await postUpload(uploadUrl(path,requestId,true));const result=state.result;
+  if(result?.state!=='completed')throw Object.assign(new Error('TRANSFER_UNKNOWN'),{code:'TRANSFER_UNKNOWN'});
+  forgetUploadRequest(storageKey);transferMessage('업로드 완료 · '+formatBytes(result.bytes)+' · SHA-256 '+result.sha256);uploadIdentity='';uploadRequestId='';$('local-file').value='';
+  }catch(e){const code=e?.code||e?.message||'TRANSFER_FAILED';if(uploadCancelRequested&&storageKey&&requestId){try{await deleteUpload(url);forgetUploadRequest(storageKey);uploadIdentity='';uploadRequestId='';cancelPending=false;transferMessage('업로드를 취소하고 MCP 호스트의 미완성 staging을 삭제했습니다.');}catch(cancelError){cancelPending=true;transferMessage('취소 여부를 확인하지 못했습니다. 취소 재시도를 눌러 다시 확인하세요 · '+(cancelError instanceof Error?cancelError.message:'TRANSFER_FAILED'),true);}}else{if(storageKey&&!resumableUploadErrors.has(code)){forgetUploadRequest(storageKey);uploadIdentity='';uploadRequestId='';}const message=code==='FILE_EXISTS'?'원격 경로에 파일이 이미 있습니다. 기존 파일은 덮어쓰지 않았습니다.':resumableUploadErrors.has(code)?'전송 응답을 확정하지 못했습니다. 같은 파일·경로로 다시 시도하면 MCP 호스트가 확인한 위치부터 이어갑니다.':code==='FILE_TOO_LARGE'?'파일이 서버 설정 한도를 넘습니다.':code==='INVALID_PATH'?'경로가 작업 공간을 벗어나거나 유효하지 않습니다.':'업로드 실패 · '+code;transferMessage(message,true);}}
+  finally{transferBusy=false;uploadPhase='idle';uploadCancelRequested=false;$('remote-path').disabled=false;$('local-file').disabled=false;$('logout').disabled=false;$('upload-file').disabled=!selectedSession||!$('local-file').files?.[0]||!$('remote-path').value.trim();$('download-file').disabled=!selectedSession||!$('remote-path').value.trim();updateCancelButton();}
 });
 $('download-file').addEventListener('click',async()=>{
   if(transferBusy||!selectedSession||!token)return;const path=$('remote-path').value.trim();if(!path)return;
-  transferBusy=true;$('upload-file').disabled=true;$('download-file').disabled=true;transferMessage('원격 파일을 준비하고 있습니다…');
+  transferBusy=true;uploadPhase='download';$('upload-file').disabled=true;$('download-file').disabled=true;$('remote-path').disabled=true;$('local-file').disabled=true;$('logout').disabled=true;updateCancelButton();transferMessage('원격 파일을 준비하고 있습니다…');
   try{
     const response=await fetch(filesUrl(path),{headers:{Authorization:'Bearer '+token},cache:'no-store',credentials:'omit',redirect:'error'});
     if(!response.ok){let code='TRANSFER_FAILED';try{code=(await response.json()).error?.code||code;}catch{}throw Object.assign(new Error(code),{status:response.status});}
     const blob=await response.blob(),name=downloadName(response,path),url=URL.createObjectURL(blob),anchor=document.createElement('a');anchor.href=url;anchor.download=name;anchor.hidden=true;document.body.append(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
     transferMessage('다운로드 완료 · '+formatBytes(blob.size)+' · '+name+' · SHA-256 '+(response.headers.get('x-content-sha256')||'확인 안 됨'));
   }catch(e){transferMessage(e.message==='FILE_TOO_LARGE'?'원격 파일이 서버 설정 한도를 넘습니다.':e.message==='INVALID_PATH'?'경로가 작업 공간을 벗어나거나 유효하지 않습니다.':'다운로드 실패 · '+e.message,true);}
-  finally{transferBusy=false;$('upload-file').disabled=!selectedSession||!$('local-file').files?.[0]||!$('remote-path').value.trim();$('download-file').disabled=!selectedSession||!$('remote-path').value.trim();}
+  finally{transferBusy=false;uploadPhase='idle';$('remote-path').disabled=false;$('local-file').disabled=false;$('logout').disabled=false;$('upload-file').disabled=!selectedSession||!$('local-file').files?.[0]||!$('remote-path').value.trim();$('download-file').disabled=!selectedSession||!$('remote-path').value.trim();updateCancelButton();}
 });

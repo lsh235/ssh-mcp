@@ -1,5 +1,13 @@
 # 오픈소스 조사 근거
 
+## 2026-10-22 v0.9.0: 브라우저→호스트 업로드 재개 조사
+
+[tus resumable upload protocol 1.0](https://tus.io/protocols/resumable-upload)은 현재 서버 offset과 다른 PATCH에 409를 반환하고 자원을 변경하지 않으며, 성공한 PATCH에서 서버가 확정한 `Upload-Offset`을 돌려주도록 규정합니다. [tus-js-client FAQ](https://github.com/tus/tus-js-client/blob/main/docs/faq.md)는 fingerprint로 이전 upload URL을 Web Storage에서 찾아 재개하는 흐름을 설명하고, 네트워크로 보낸 진행률과 서버가 수락한 chunk 완료를 구분합니다.
+
+Shell MCP는 사용자 문제가 남아 있던 브라우저(A)→MCP 호스트(B) 구간에 이 설계 원칙을 적용했습니다. 브라우저가 1 MiB SHA-256 manifest를 만들고, 인증된 B가 private staging에 저장한 청크만 offset으로 확정합니다. 응답 유실 뒤 동일 요청 ID로 확인된 offset을 다시 읽고, 완료 시 기존 B→C SSH transfer를 호출합니다. 화면은 클라이언트 전송량과 B의 확인 offset을 별도로 표시합니다.
+
+현재 viewer API는 tus 프로토콜 호환을 표방하지 않습니다. tus의 upload URL/HEAD/OPTIONS/프로토콜 헤더 대신 기존 bearer 인증·view/session 식별자와 create/PATCH/complete 경로를 사용합니다. 요청 ID만 같은 탭의 `sessionStorage`에 보관해 새로고침 뒤 재시도할 수 있으며, 브라우저 종료나 MCP 프로세스 재시작을 넘는 resume은 제공하지 않습니다. tus의 선택형 [Termination extension](https://tus.io/protocols/resumable-upload#termination)을 참고해 현재 브라우저→호스트 전송을 마친 뒤 미완료 staging을 지우는 인증 DELETE를 추가했습니다. B→C SSH 게시 단계의 중단 기능과 결합하지 않습니다. 소스 코드를 복사하거나 의존성을 추가하지 않았습니다. 실제 VS Code Integrated Browser/Copilot과 외부 HTTPS 배포는 검증하지 않았습니다.
+
 ## 2026-10-22 v0.8.2: 파일 전송 재개 조사
 
 [tus 프로토콜 1.0](https://tus.io/protocols/resumable-upload)은 HEAD로 서버가 확정한 `Upload-Offset`을 확인한 뒤 같은 위치에서 PATCH를 이어가며, 서버 현재 offset과 요청 offset이 다르면 409로 upload resource를 변경하지 않도록 정의합니다. Shell MCP는 현재 단일 PUT 브라우저 API를 유지하므로 tus endpoint는 구현하지 않았고, 원격 helper에서 확정 offset을 되돌려 주는 아이디어만 적응했습니다.

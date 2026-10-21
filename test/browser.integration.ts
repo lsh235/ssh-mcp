@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { ShellService } from '../src/service.js';
 import { startServer } from '../src/server.js';
@@ -155,6 +156,67 @@ test('browser uploads resume confirmed SSH prefixes and reset a corrupt remote p
   }finally{await service.shutdown();await f.close();}
 });
 
+test('chunked browser uploads resume host staging, reject offsets and verify each chunk',{timeout:45000},async()=>{
+  const f=await fixture();process.env.SHELL_MCP_TEST_TOKEN=token;const runtime=await startServer(f.config),service=runtime.service;
+  const base=`http://127.0.0.1:${(runtime.server.address() as {port:number}).port}`;f.config.publicUrl=base+'/mcp';
+  try{
+    const session=await service.open('owner','test','project','chunked-upload-session');
+    const view=service.createSessionView('owner',[session.id],'chunk upload','chunked-upload-view');
+    const uploadUrl=base+'/viewer-api/views/'+view.viewId+'/sessions/'+session.id+'/uploads';
+    const headers={Authorization:'Bearer '+token};
+    const bytes=Buffer.alloc(2*1048576+19);for(let i=0;i<bytes.length;i++)bytes[i]=(i*43+29)%256;
+    const chunks:string[]=[];for(let offset=0;offset<bytes.length;offset+=1048576)chunks.push(createHash('sha256').update(bytes.subarray(offset,Math.min(bytes.length,offset+1048576))).digest('hex'));
+    const create=(requestId:string,path:string,chunkHashes=chunks,auth=true)=>fetch(uploadUrl,{method:'POST',headers:{...(auth?headers:{}),'Content-Type':'application/json'},body:JSON.stringify({path,requestId,size:bytes.length,chunks:chunkHashes})});
+    assert.equal((await create('chunked','chunked.bin',chunks,false)).status,401);
+    const initialized=await create('chunked','chunked.bin');assert.equal(initialized.status,201);assert.equal((await initialized.json()).offset,0);
+    const changed=[...chunks];changed[0]='0'.repeat(64);const conflict=await create('chunked','chunked.bin',changed);
+    assert.equal(conflict.status,409);assert.equal((await conflict.json()).error.code,'REQUEST_CONFLICT');
+    const badChunk=Buffer.from(bytes.subarray(0,1048576));badChunk[0]^=0xff;
+    const patch=(offset:number,body:Buffer)=>fetch(uploadUrl+'?'+new URLSearchParams({path:'chunked.bin',requestId:'chunked'}),{
+      method:'PATCH',headers:{...headers,'Content-Type':'application/offset+octet-stream','Upload-Offset':String(offset)},body
+    });
+    const bad=await patch(0,badChunk);assert.equal(bad.status,409);assert.equal((await bad.json()).error.code,'UPLOAD_CHECKSUM');
+    assert.equal((await (await create('chunked','chunked.bin')).json()).offset,0,'a bad chunk must not advance the confirmed offset');
+    const first=await patch(0,bytes.subarray(0,1048576));assert.equal(first.status,204);assert.equal(first.headers.get('upload-offset'),'1048576');
+    const resumed=await create('chunked','chunked.bin');assert.equal(resumed.status,200);assert.equal((await resumed.json()).offset,1048576);
+    const stale=await patch(0,bytes.subarray(0,1048576));assert.equal(stale.status,409);assert.equal(stale.headers.get('upload-offset'),'1048576');
+    const staged=join(f.config.stateDir,'transfers',readdirSync(join(f.config.stateDir,'transfers'))[0]);
+    const damaged=readFileSync(staged);damaged[0]^=0xff;writeFileSync(staged,damaged);
+    const reconciled=await create('chunked','chunked.bin');assert.equal(reconciled.status,200);assert.equal((await reconciled.json()).offset,0,'a same-length corrupt confirmed prefix must restart from zero');
+    assert.equal((await patch(0,bytes.subarray(0,1048576))).status,204);
+    writeFileSync(staged,bytes.subarray(0,123));
+    const shortened=await patch(1048576,bytes.subarray(1048576,2*1048576));assert.equal(shortened.status,409);assert.equal(shortened.headers.get('upload-offset'),'0','a missing confirmed prefix resets the server offset');
+    const reset=await create('chunked','chunked.bin');assert.equal(reset.status,200);assert.equal((await reset.json()).offset,0);
+    assert.equal((await patch(0,bytes.subarray(0,1048576))).status,204);
+    const incomplete=await fetch(uploadUrl+'/complete?'+new URLSearchParams({path:'chunked.bin',requestId:'chunked'}),{method:'POST',headers});
+    assert.equal(incomplete.status,409);assert.equal((await incomplete.json()).error.code,'TRANSFER_INCOMPLETE');
+    const middle=await patch(1048576,bytes.subarray(1048576,2*1048576));assert.equal(middle.status,204);assert.equal(middle.headers.get('upload-offset'),String(2*1048576));
+    const tail=await patch(2*1048576,bytes.subarray(2*1048576));assert.equal(tail.status,204);assert.equal(tail.headers.get('upload-offset'),String(bytes.length));
+    const completeUrl=uploadUrl+'/complete?'+new URLSearchParams({path:'chunked.bin',requestId:'chunked'});
+    const completed=await fetch(completeUrl,{method:'POST',headers});assert.equal(completed.status,200);
+    const result=(await completed.json()).result;assert.equal(result.state,'completed');assert.equal(result.bytes,bytes.length);
+    assert.deepEqual(readFileSync(join(f.root,'chunked.bin')),bytes);
+    const repeated=await create('chunked','chunked.bin');assert.equal(repeated.status,200);assert.equal((await repeated.json()).complete,true);
+    const completedAgain=await fetch(completeUrl,{method:'POST',headers});assert.equal((await completedAgain.json()).result.transferId,result.transferId);
+    const completedDelete=await fetch(uploadUrl+'?'+new URLSearchParams({path:'chunked.bin',requestId:'chunked'}),{method:'DELETE',headers});
+    assert.equal(completedDelete.status,409);assert.equal((await completedDelete.json()).error.code,'TRANSFER_COMPLETED');
+    assert.equal((await create('cancel-upload','cancel.bin')).status,201);
+    const cancelQuery=new URLSearchParams({path:'cancel.bin',requestId:'cancel-upload'});
+    const cancelPatch=await fetch(uploadUrl+'?'+cancelQuery,{method:'PATCH',headers:{...headers,'Content-Type':'application/offset+octet-stream','Upload-Offset':'0'},body:bytes.subarray(0,1048576)});
+    assert.equal(cancelPatch.status,204);
+    const cancelUrl=uploadUrl+'?'+cancelQuery;
+    assert.equal((await fetch(cancelUrl,{method:'DELETE',headers:{}})).status,401);
+    assert.equal((await fetch(cancelUrl,{method:'DELETE',headers})).status,204);
+    assert.equal((await fetch(cancelUrl,{method:'DELETE',headers})).status,204,'cancellation is safe to retry after an uncertain response');
+    const afterCancel=await create('cancel-upload','cancel.bin');assert.equal(afterCancel.status,201);assert.equal((await afterCancel.json()).offset,0);
+    assert.equal((await fetch(cancelUrl,{method:'DELETE',headers})).status,204);
+    const cancelledComplete=await fetch(uploadUrl+'/complete?'+new URLSearchParams({path:'cancel.bin',requestId:'cancel-upload'}),{method:'POST',headers});
+    assert.equal(cancelledComplete.status,410,'a deleted staging upload cannot be completed');
+    assert.deepEqual(readdirSync(join(f.config.stateDir,'transfers')),[]);
+    await service.closeSession('owner',session.id);
+  }finally{await runtime.stop();await f.close();delete process.env.SHELL_MCP_TEST_TOKEN;}
+});
+
 test('saved browser views are idempotent, owner scoped, bounded and survive restart',{timeout:15000},async()=>{
   const f=await fixture();process.env.SHELL_MCP_TEST_TOKEN=token;let runtime=await startServer(f.config);
   try{
@@ -184,6 +246,8 @@ test('viewer static assets have strict policies and never embed credentials',{ti
     const html=await (await fetch(base+'/sessions')).text(),js=await (await fetch(base+'/session-assets/app.js')).text();
     assert(html.includes('type="file"'));assert(html.includes('원격 파일 전송'));assert(js.includes('XMLHttpRequest'));
     assert(!js.includes('localStorage'));assert(js.includes('sessionStorage.getItem'));assert(js.includes('sessionStorage.setItem'));
+    assert(js.includes("xhr.open('PATCH'"));assert(js.includes("'/uploads'"));
+    assert(js.includes("method:'DELETE'"));assert(html.includes('id="cancel-upload"'));
     assert(!js.includes("sessionStorage.setItem('token'"));assert(!js.includes('sessionStorage.setItem("token"'));
     assert.equal((await fetch(base+'/session-assets/no-such-file')).status,404);
   }finally{await runtime.stop();await f.close();delete process.env.SHELL_MCP_TEST_TOKEN;}

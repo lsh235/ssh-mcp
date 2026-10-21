@@ -34,8 +34,10 @@
 | P3 / 조사 필요 | 선택형 명령 승인 정책 | VS Code는 `readOnlyHint`가 아닌 도구의 확인 UI와 Elicitation을 설명함. `tufantunc/ssh-mcp`에는 승인 정책이 있지만 SECURITY/changelog에 명령 분류기 우회가 반복 공개됨 | 기본 도구 확인과 서버 측 `ask-all`을 구분. 적용한다면 classifier 없이 매 명령을 fail-closed로 승인하고 실제 Copilot에서 native dialog 중복·무응답 동작을 검증 |
 | P4 / v0.8 구현 | 브라우저 경유 아티팩트 이동 | 업스트림은 제한된 transfer root와 모델 문맥 밖 파일 streaming을 제공. B의 로컬 경로가 A의 로컬 파일을 가리키지는 않으므로 브라우저가 선택한 파일을 A→B→C로 전달 | 최대 64 MiB 기본/256 MiB 설정 상한, 1 MiB 청크 업로드, 2 MiB 청크 다운로드, SHA-256, create-only 원자적 게시, 요청 ID 중복 조회, 세션·workspace 경계, 감사, postLogin helper 재사용을 구현. 격리 OpenSSH 실험 통과 |
 | v0.8.1 구현 / 재개는 보류 | 재시작 뒤 고아 transfer spool 정리 | 업스트림 SFTP는 실패 `.part`를 정리하지만 이어쓰기 재개는 제공하지 않음. OpenBSD `sftp -a`는 부분 내용 불일치 시 손상 가능성을 경고 | 새 SSH worker가 24시간 지난 private 작업 디렉터리에서 죽은 PID/start-time을 확인해 비재귀 정리. 활성·최근·신원 불명·예상 밖 파일 구조는 보존. 자동 resume는 source/checksum/remote identity/progress journal과 client 재선택 경험을 별도 설계할 때까지 보류 |
-| P5 / v0.8.2 부분 재개 구현 | 사용자 재시도 업로드 | tus는 HEAD로 서버 확인 offset을 조회하고 정확히 일치하는 Upload-Offset에서 PATCH를 계속하며, 고정 검토한 ssh-mcp-toolkit은 `.part` 크기를 재개 위치로 쓰고 최종 SHA-256을 확인함 | 같은 살아 있는 SSH 세션 안에서만 재개. 원격 prefix SHA-256을 브라우저 원본 staged file과 비교하고 불일치 시 0부터 재전송. 브라우저는 요청 ID만 sessionStorage에 보관. 전체 tus HTTP protocol, B→C 이외의 A→B chunk 재개, MCP/SSH 재시작을 넘는 journal은 후속 검토 |
-| P5 / 조사 필요 | PTY 기반 대화형 프로그램 | 현재 명령은 재현성 있는 non-PTY Bash를 기본으로 함. TUI/REPL 사용 요청이 확인되면 추가 이점이 있음 | PTY를 기존 managed shell과 분리된 세션 모드로 평가하고 terminal resize, ANSI 출력, interrupt, 게이트 입력, 세션 유실 시험을 설계 |
+| P5 / v0.8.2 구현 | B→C 사용자 재시도 업로드 | tus offset 원칙과 고정 검토한 ssh-mcp-toolkit의 `.part` 크기·최종 SHA-256 흐름을 참고 | 같은 살아 있는 SSH 세션 안에서 확인된 remote prefix SHA-256을 비교하고 불일치 시 처음부터 재전송. 서버·SSH 재시작을 넘는 resume은 제공하지 않음 |
+| P6 / v0.9.0 구현 | A→B 브라우저 청크 업로드 재개·취소 | tus protocol의 offset mismatch 409와 Termination DELETE 원칙, tus-js-client FAQ의 resume identity와 sent/accepted progress 구분 | 1 MiB SHA-256 청크, prefix 재검증, B의 private staging, 서버 확인 offset, 응답 유실 재시도, 미완료 staging DELETE, 기존 B→C 경로로 구현. B→C 실행 중 취소·브라우저/MCP 재시작 복구·tus 호환성은 보류 |
+| P7 / 조사 필요 | 브라우저 종료·MCP 재시작 뒤 업로드 재개 | tus-js-client FAQ는 Web Storage로 upload identity를 찾아 브라우저 종료 뒤 이어갈 수 있다고 설명함. Shell MCP는 staging metadata가 메모리에 있어 브라우저 저장소만 늘려도 B 재시작 뒤 복구되지 않음 | 서버 측 durable journal, owner/view/session 검증, expiry·disk quota, SSH 세션 재개 불가 시 transfer rebind 모델을 설계. 인증 토큰은 브라우저 저장소에 저장하지 않음 |
+| P8 / 조사 필요 | PTY 기반 대화형 프로그램 | 현재 명령은 재현성 있는 non-PTY Bash를 기본으로 함. TUI/REPL 사용 요청이 확인되면 추가 이점이 있음 | PTY를 기존 managed shell과 분리된 세션 모드로 평가하고 terminal resize, ANSI 출력, interrupt, 게이트 입력, 세션 유실 시험을 설계 |
 | 보류 | 업스트림의 직접 SSH credential/profile, 임의 HTTP 상태 화면, 명령 문자열 위험 분류 | 본 프로젝트는 설치 PC의 OpenSSH config·키·agent, 기존 소유권 보호, 인증된 읽기 전용 브라우저 뷰가 요구됨. 원본 SECURITY 문서에는 classifier bypass 관련 공개 권고가 여러 개 있음 | 요구사항이 바뀌지 않는 한 현재 모델을 대체하지 않음 |
 
 ## 2026-10-22 현재 조사 입력
@@ -69,10 +71,17 @@
 - 요청 ID만 같은 탭의 `sessionStorage`에 기록합니다. 새로고침 후 사용자가 토큰을 다시 입력하고 같은 파일과 경로를 선택하면 같은 ID를 사용합니다. token은 저장하지 않습니다. A→B HTTP body는 처음부터 다시 전송하므로 진정한 browser-to-server chunk resume은 아닙니다.
 - 재개는 server와 SSH worker가 살아 있어 같은 session runtime의 staging spool에 접근 가능한 경우로 한정합니다. 서버/SSH 세션 재시작, 새 SSH ID, view/session 변경 뒤 자동 이어쓰기는 하지 않으며 `SERVER_RESTART` unknown은 다시 실행하지 않습니다. 실제 VS Code Integrated Browser는 NOT RUN입니다.
 
+## 2026-10-22 v0.9.0 라운드
+
+- [tus protocol 1.0](https://tus.io/protocols/resumable-upload)은 PATCH offset이 서버 현재값과 다르면 409와 무변경을 요구하고, accepted bytes 뒤에 새 `Upload-Offset`을 응답하게 합니다. [tus-js-client FAQ](https://github.com/tus/tus-js-client/blob/main/docs/faq.md)는 전송량 표시와 server-accepted chunk를 구별하고, fingerprint와 Web Storage로 재개 identity를 찾는다고 설명합니다.
+- 이를 A→B 구간에 한정 적용했습니다. B는 1 MiB 조각을 private staging에 기록하고 chunk SHA-256·길이·offset 검증·fsync 후 offset을 확정합니다. 같은 요청 ID의 재시도는 서버가 반환한 offset부터 이어지고 최종 완료에서 v0.8.2의 B→C 경로를 호출합니다.
+- tus 호환 프로토콜 구현은 아닙니다. 브라우저 새로고침까지 지원하는 같은-tab `sessionStorage` ID이며, 브라우저 종료/MCP 재시작, 실제 VS Code Integrated Browser/Copilot과 public HTTPS는 검증 범위 밖입니다. 코드 복사와 런타임 의존성 추가는 없습니다.
+- [tus Termination extension](https://tus.io/protocols/resumable-upload#termination)은 미완료 upload 자원을 DELETE하고 사용 자원을 회수하는 선택 기능을 정의합니다. Shell MCP는 그 아이디어를 적응해, 현재 청크가 확정된 뒤 B의 미완료 staging을 지우는 인증 DELETE와 재시도 가능한 UI를 추가했습니다. B→C SSH 게시 중에는 취소 버튼을 숨겨 취소 범위를 과장하지 않습니다.
+
 ## 2026-10-22 v0.8.1 라운드
 
 - 같은 upstream revision의 [SFTP adapter](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/ssh/sftp.ts)와 [transfer tools](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/tools/transfer-tools.ts)를 다시 확인했습니다. 다운로드 staging은 `finally`에서 제거되고 streaming 업로드의 `.part`도 실패 후 정리하지만, 프로세스 종료 이후 재개 기능은 확인하지 못했습니다. OpenBSD [`sftp(1)`](https://man.openbsd.org/sftp.1)의 resume 설명은 partial 내용 불일치에 따른 corruption 위험을 명시합니다.
 - 그래서 확인되지 않은 바이트 이어쓰기를 추가하지 않고, 새 `prepare` 시 24시간 이상 지난 private remote worker directories 중 worker PID/start-time이 죽은 것으로 확인된 것만 비재귀 삭제합니다. 활성 PID, 최근 항목, identity 누락, 중첩/특수 파일은 보존합니다. 이전 결과는 계속 `unknown`이며 실행을 replay하지 않습니다.
 - 코드는 upstream에서 복사하지 않았습니다. 실제 격리 OpenSSH 시험은 stale 삭제, 오래된 live worker 보존, 최근/identity 없는/중첩 경로 보존을 확인합니다.
 
-기능 백로그는 매 라운드 새 웹 근거와 사용자 요구로 다시 정렬합니다. 다음 후보는 B측 A→B body를 tus 방식으로 조각 업로드해 브라우저 네트워크 중단 뒤에도 호스트 staging부터 재개하고, 실제 VS Code Integrated Browser에서 파일 재선택·sessionStorage 범위를 검증하는 것입니다. unknown 결과를 자동 재실행하지 않는 원칙을 유지합니다.
+기능 백로그는 매 라운드 새 웹 근거와 사용자 요구로 다시 정렬합니다. 다음 후보는 브라우저를 닫거나 MCP 호스트를 재시작한 뒤 A→B upload를 복원하는 durable staging journal입니다. sessionStorage만 localStorage로 바꾸지 않고 owner·view·session 검증, 용량 제한, 만료와 SSH 세션 rebind의 한계를 먼저 설계합니다.
