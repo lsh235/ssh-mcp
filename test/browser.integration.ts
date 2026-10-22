@@ -52,6 +52,12 @@ test('browser view: real SSH + MCP creation, bounded history/output, auth and ex
     assert(!('command' in commands[0]));assert(!('owner' in commands[0]));
     const output=(await (await get(path+'/commands/'+job.id+'/output?stream=stdout&cursor=0')).json()).result;
     assert.equal(Buffer.from(output.base64,'base64').toString(),payload);
+    const terminal=await service.openTerminal('owner',s.id,"printf 'BROWSER-PTY'",'browser-pty',24,80,1000,10000,'Terminal check');
+    assert.equal(terminal.state,'completed');
+    const terminalRows=(await (await get(path+'/sessions/'+s.id+'/commands')).json()).result;
+    assert.equal(terminalRows[0].commandId,terminal.id);assert.equal(terminalRows[0].mode,'terminal');
+    assert.equal(terminalRows[0].terminalRows,24);assert.equal(terminalRows[0].terminalColumns,80);
+    assert.equal((await (await get(path+'/commands/'+terminal.id+'/output?stream=stdout&cursor=0')).json()).result.content,'BROWSER-PTY');
     const binary=Buffer.alloc(2*1024*1024+37);for(let i=0;i<binary.length;i++)binary[i]=(i*31+17)%256;
     const localUpload=join(f.dir,'browser-transfer.bin');writeFileSync(localUpload,binary);
     const fileUrl=(sessionId:string,remotePath:string,requestId?:string)=>{

@@ -155,14 +155,23 @@ test('HTTP MCP exposes and executes all five new tools',{timeout:30000},async()=
   const client=new Client({name:'v02-http',version:'1'},{versionNegotiation:{mode:'auto'}});
   try{
     await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`),{requestInit:{headers:{Authorization:'Bearer '+process.env.SHELL_MCP_TEST_TOKEN}}}));
-    const names=(await client.listTools()).tools.map(t=>t.name);assert.equal(names.length,20);
-    for(const name of ['send_input','wait_command','search_files','list_commands','reopen_session'])assert.ok(names.includes(name));
+    const names=(await client.listTools()).tools.map(t=>t.name);assert.equal(names.length,25);
+    for(const name of ['send_input','wait_command','search_files','list_commands','reopen_session','open_terminal','read_terminal','write_terminal','resize_terminal','close_terminal'])assert.ok(names.includes(name));
     const call=async(name:string,args:Record<string,unknown>)=>{const response=await client.callTool({name,arguments:args});assert.ok(!response.isError,JSON.stringify(response));return(response.structuredContent as {result:Record<string,unknown>}).result;};
     const s=await call('open_session',{targetId:'test',workspaceId:'project',clientRequestId:'http'});
     const c=await call('run_command',{sessionId:s.id,command:'read -r value; printf "$value"',inputMode:'pipe',clientRequestId:'cmd',waitMs:100});
     await call('send_input',{commandId:c.id,data:'hello\n',end:true,clientRequestId:'input'});
     const done=await call('wait_command',{commandId:c.id,waitMs:5000});assert.equal(done.terminal,true);
-    const history=await call('list_commands',{sessionId:s.id});assert.equal((history.commands as unknown[]).length,1);
+    const terminal=await call('open_terminal',{sessionId:s.id,command:"python3 -u -c \"import sys; print('PTY-READY',flush=True); sys.stdin.readline(); print('PTY-DONE',flush=True)\"",clientRequestId:'pty-open',waitMs:200});
+    assert.equal(terminal.mode,'terminal');
+    assert.equal((await call('wait_command',{commandId:terminal.id,waitMs:1000})).terminal,false);
+    assert.match((await call('read_terminal',{commandId:terminal.id,cursor:0})).content,/PTY-READY/);
+    await call('resize_terminal',{commandId:terminal.id,rows:33,columns:120,clientRequestId:'pty-resize'});
+    await call('write_terminal',{commandId:terminal.id,data:'\n',clientRequestId:'pty-input'});
+    const ptyDone=await call('wait_command',{commandId:terminal.id,waitMs:5000});assert.equal(ptyDone.terminal,true);
+    const ptyOutput=await call('read_terminal',{commandId:terminal.id,cursor:0});assert.match(ptyOutput.content,/PTY-READY/);assert.match(ptyOutput.content,/PTY-DONE/);
+    assert.equal((await call('close_terminal',{commandId:terminal.id,clientRequestId:'pty-close'})).terminal,true);
+    const history=await call('list_commands',{sessionId:s.id});assert.equal((history.commands as unknown[]).length,2);
     writeFileSync(join(f.root,'search.txt'),'hello MCP');
     const found=await call('search_files',{sessionId:s.id,query:'MCP'});assert.equal((found.matches as unknown[]).length,1);
     await call('close_session',{sessionId:s.id});

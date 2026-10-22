@@ -1,5 +1,13 @@
 # 오픈소스 조사 근거
 
+## 2026-10-22 v0.12.0: PTY 대화형 프로그램
+
+[Tabby `shellChannel.ts`](https://github.com/Eugeny/tabby/blob/467ce8ebfa467fb88cf6d154c9a5891e3d3647f0/tabby-ssh/src/session/shellChannel.ts)는 `xterm-256color`, 80×24 크기로 SSH session channel의 PTY를 요청하고 이후 터미널 resize를 분리해서 전달합니다. [RFC 4254](https://datatracker.ietf.org/doc/html/rfc4254)는 그 SSH protocol request(`pty-req`)와 `window-change`를 정의합니다.
+
+[tufantunc/ssh-mcp의 고정 README](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/README.md)는 여러 프로필의 stateful interactive/background session과 세션 수명 제한을 제공합니다. [현재 보안 설명](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/SECURITY.md)은 persistent session이 명령별 문자열 분류와 별개인 권한 위험이라는 점도 기록합니다. 자체 OpenSSH 인증정보와 정책 분류가 필요한 설치 방식이므로 이 프로젝트보다 일반적으로 더 낫다고 볼 수는 없습니다. 프로젝트 배치와 host 권한 경계에 따라 선택해야 합니다.
+
+Shell MCP는 해당 코드를 복사하지 않고, 기존 C의 Python PTY 프로세스와 Bash worker를 연결해 `open_terminal` 등 다섯 도구를 추가했습니다. app은 controlling PTY·TERM·크기/SIGWINCH를 보지만, SSH worker channel 자체는 non-PTY이며 protocol `pty-req`는 전달하지 않습니다. postLogin gateway의 같은 인증 channel을 유지하고 원격 게이트 값 출력 마스킹을 공유합니다. 시험·브라우저 한계는 [v0.12.0 기록](V012_STATUS.md), 상세한 적응 판단은 [마이그레이션 라운드](UPSTREAM_MIGRATION.md)에 있습니다.
+
 ## 2026-10-22 v0.11.0: postLogin 출력 마스킹
 
 이번 웹 재조사에서 `tufantunc/ssh-mcp` main `5c5b8476492cda568fca779b307ff8a2ca0bbbb7`의 [CHANGELOG](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/CHANGELOG.md)를 확인했습니다. 2.19.2는 설정된 sudo 비밀번호를 명령 출력에서 제거하는 수정과, NOPASSWD 상황에서 비밀번호가 wrapped command에 보일 수 있던 문제를 함께 기록합니다. 2.20.0은 `sqlite3`, `tar`, `gdb`, `make`, `ssh host cmd` 등 명령 실행 경로가 안전 명령으로 분류되던 문제를 고쳤다고 기록합니다. 반복되는 분류기 우회 보완은 문자열 분류를 이 프로젝트의 권한 경계로 채택하지 않을 이유를 다시 확인시킵니다.

@@ -29,8 +29,17 @@ export class SecretOutputRedactor {
     this.pendingMask.copy(mask, 0, 0, this.pendingMask.length);
     this.markMatches(combined, mask);
 
-    // An incomplete match can only begin in the last maxLength - 1 bytes.
-    const safeLength = Math.max(0, combined.length - this.maxLength + 1);
+    // Retain only a suffix that could still become a secret when the next
+    // output chunk arrives. Holding every last maxLength-1 bytes stalls PTYs.
+    let safeLength = combined.length;
+    const earliest = Math.max(0, combined.length - this.maxLength + 1);
+    for (let start = earliest; start < combined.length; start++) {
+      const length = combined.length - start;
+      if (this.secrets.some(secret => length < secret.length && secret.subarray(0, length).equals(combined.subarray(start)))) {
+        safeLength = start;
+        break;
+      }
+    }
     const output = Buffer.from(combined.subarray(0, safeLength));
     for (let i = 0; i < safeLength; i++) if (mask[i]) output[i] = 0x2a;
 

@@ -9,6 +9,7 @@ import { SecretOutputRedactor } from './output-redactor.js';
 
 const helper = readFileSync(new URL('./runner/files.py', import.meta.url), 'utf8');
 const worker = readFileSync(new URL('./runner/worker.sh', import.meta.url), 'utf8');
+const ptyRunner = readFileSync(new URL('./runner/pty.py', import.meta.url), 'utf8');
 export interface PollResult {
   done: null | {exitCode: number; cwd: string};
   streams: Record<string, {base64: string; size: number; truncated: boolean}>;
@@ -125,6 +126,9 @@ export class SSHConnection {
     assert(this.alive && this.shell, 'SSH_DISCONNECTED', 'Persistent shell is unavailable');
     if(this.gateway)await this.gateway.submit(commandId);
     else this.shell.stdin.write(commandId + '\n');
+  }
+  terminalCommand(commandId:string,command:string,rows:number,columns:number){
+    return `python3 -c ${quote(ptyRunner)} ${quote(this.remoteDir)} ${quote(commandId)} ${rows} ${columns} ${quote(command)}`;
   }
   poll(commandId: string, offsets: Record<string, number>) {
     return this.helper<PollResult>({op:'poll', commandId, maximum:this.maximum, offsets});

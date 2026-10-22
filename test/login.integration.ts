@@ -88,6 +88,21 @@ test('post-SSH gate: two prompt inputs, same-channel files/git/commands, stdin a
     assert.equal(readFileSync(join(f.dir,'visits'),'utf8'),'visit\nvisit\n');await s.closeSession('owner',reopened.id);
   }finally{await s.shutdown();await f.close();delete process.env.SHELL_MCP_FIXTURE_GATE_USER;}
 });
+test('post-SSH gate: terminal commands reuse the authenticated channel and preserve output masking',{timeout:30000},async()=>{
+  const f=await fixture({gate}),config=configured(f),s=new ShellService(config);
+  try{
+    const session=await s.open('owner','test','project','gate-pty');
+    const code="import os,time; print('READY:%s:%s'%(os.isatty(0),os.getenv('GATE_TEST_USER')),flush=True); print('SECRET:'+os.getenv('GATE_TEST_SECRET'),flush=True); time.sleep(30)";
+    const terminal=await s.openTerminal('owner',session.id,`python3 -u -c ${quote(code)}`,'gate-pty-command',24,80,250,20000);
+    let cursor=0,output='';const deadline=Date.now()+8000;
+    while(Date.now()<deadline&&(output.split('SECRET:')[1]?.trim().length??0)<Buffer.byteLength(password)){const page=s.readOutput('owner',terminal.id,'stdout',cursor,32768);cursor=page.nextCursor;output+=page.content;await sleep(50);}
+    assert.match(output,new RegExp(`READY:True:${'\\*'.repeat(Buffer.byteLength(username))}`));assert.equal(output.split('SECRET:')[1]?.trim(),'*'.repeat(Buffer.byteLength(password)));
+    await s.closeTerminal('owner',terminal.id,'gate-pty-close');assert.equal((await done(s,terminal.id)).state,'completed');
+    const after=await s.run('owner',session.id,'printf "%s" "$GATE_TEST_USER"','gate-after-pty',1000,10000);
+    assert.equal(after.exitCode,0);assert.equal(s.readOutput('owner',after.id,'stdout').content,'*'.repeat(Buffer.byteLength(username)));
+    await s.closeSession('owner',session.id);
+  }finally{await s.shutdown();await f.close();delete process.env.SHELL_MCP_FIXTURE_GATE_USER;}
+});
 test('unmatched gate prompt times out without sending later input or exposing banners',{timeout:20000},async()=>{
   const f=await fixture({gate}),config=configured(f,'Never shown:');config.targets.test.postLogin!.timeoutMs=150;
   const s=new ShellService(config);

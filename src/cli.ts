@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { loadConfig } from './config.js';
 import { startServer } from './server.js';
+import { VERSION } from './version.js';
 const args=process.argv.slice(2);
 if(args.includes('--help')) {
-  console.log('Shell MCP 0.11.0\nUsage: node dist/cli.js --config /absolute/path/config.json\nRequires: Linux, Node >=22.16, OpenSSH; target: Bash, Python >=3.9, setsid.\nCredentials are read only on this MCP host. See docs/OPERATIONS.md.');
-}else if(args.includes('--version'))console.log('0.11.0');
+  console.log(`Shell MCP ${VERSION}\nUsage: node dist/cli.js --config /absolute/path/config.json\nRequires: Linux, Node >=22.16, OpenSSH; target: Bash, Python >=3.9, setsid.\nCredentials are read only on this MCP host. See docs/OPERATIONS.md.`);
+}else if(args.includes('--version'))console.log(VERSION);
 else {
   try {
     process.umask(0o077);

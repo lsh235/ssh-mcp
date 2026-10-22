@@ -6,6 +6,7 @@ import type { Config } from './config.js';
 import { Authenticator } from './auth.js';
 import { ShellService } from './service.js';
 import { createTools } from './tools.js';
+import { VERSION } from './version.js';
 import { Fault } from './core.js';
 import { sessionViewer } from './viewer.js';
 
@@ -27,7 +28,7 @@ export function createApp(config:Config) {
     res.set('Cache-Control','no-store');next();
   });
   app.use(sessionViewer(auth,service));
-  app.get('/health',(_req,res)=>res.json({status:'ok',version:'0.11.0'}));
+  app.get('/health',(_req,res)=>res.json({status:'ok',version:VERSION}));
   for(const path of ['/.well-known/oauth-protected-resource','/.well-known/oauth-protected-resource/mcp'])app.get(path,(_req,res)=>{
     if(config.auth.mode!=='oauth'){res.sendStatus(404);return;}res.json(auth.metadata());
   });

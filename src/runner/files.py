@@ -92,6 +92,76 @@ def orphan_process_state(pid, start):
         return 'dead'
     return 'alive'
 
+def process_fields(pid):
+    try:
+        fields = pathlib.Path('/proc', str(pid), 'stat').read_text().rsplit(')', 1)[1].split()
+        if len(fields) <= 19: return None
+        return fields
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except (OSError, IndexError):
+        return None
+
+def process_group_alive(pgid):
+    try:
+        with os.scandir('/proc') as processes:
+            for process in processes:
+                if not process.name.isdigit(): continue
+                fields = process_fields(int(process.name))
+                if fields and fields[0] != 'Z' and fields[2] == str(pgid): return True
+    except OSError:
+        return True
+    return False
+
+def load_pty_record(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'r', encoding='utf-8') as record_file:
+        info = os.fstat(record_file.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 4096):
+            fail('INVALID_PROCESS_RECORD', 'PTY process record is invalid')
+        data = json.load(record_file)
+    pid, start = data.get('pid'), data.get('start')
+    if (isinstance(pid, bool) or not isinstance(pid, int) or pid <= 1
+        or not isinstance(start, str) or not re.fullmatch(r'\d+', start)):
+        fail('INVALID_PROCESS_RECORD', 'PTY process record is invalid')
+    return pid, start
+
+def terminate_pty_record(path):
+    pid, start = load_pty_record(path)
+    fields = process_fields(pid)
+    if fields is None:
+        return True
+    if fields[19] != start or int(fields[2]) != pid:
+        return False
+    try: os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError: return True
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        if not process_group_alive(pid): return True
+        time.sleep(0.05)
+    try: os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError: return True
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        if not process_group_alive(pid): return True
+        time.sleep(0.05)
+    return not process_group_alive(pid)
+
+def terminate_nested_ptys(directory):
+    confirmed = True
+    with os.scandir(directory) as children:
+        for child in children:
+            if not re.fullmatch(r'\.pty-c_[a-f0-9-]{36}\.identity', child.name): continue
+            if child.is_symlink() or not child.is_file(follow_symlinks=False):
+                confirmed = False
+                continue
+            try:
+                if not terminate_pty_record(child.path): confirmed = False
+            except (OSError, ValueError, TypeError, KeyError, Failure):
+                confirmed = False
+    return confirmed
+
 def cleanup_orphan_sessions():
     cutoff = time.time() - ORPHAN_SESSION_AGE_SECONDS
     examined = removed = 0
@@ -127,6 +197,8 @@ def cleanup_orphan_sessions():
                     or not isinstance(start, str) or not re.fullmatch(r'\d+', start)):
                     continue
                 if orphan_process_state(pid, start) != 'dead':
+                    continue
+                if not terminate_nested_ptys(directory):
                     continue
                 names = []
                 safe = True
@@ -220,6 +292,7 @@ def main(a):
             with open(directory+'/'+cid+'.done') as f: result['done'] = json.load(f)
         return result
     if op == 'kill':
+        nested_confirmed = terminate_nested_ptys(directory)
         with open(directory+'/identity') as f: identity = json.load(f)
         pid = identity['pid']
         try:
@@ -235,13 +308,14 @@ def main(a):
             except FileNotFoundError: break
             time.sleep(0.05)
         else: return {'terminationConfirmed': False}
-        return {'terminationConfirmed': True}
+        return {'terminationConfirmed': nested_confirmed}
     if op == 'discard_command':
         for p in pathlib.Path(directory).glob(a['commandId']+'.*'):
             if not p.is_dir() or p.is_symlink(): p.unlink()
         return {'ok': True}
     if op == 'cleanup':
         # Delete only files created in our owned private spool; no recursive traversal.
+        if not terminate_nested_ptys(directory): fail('TERMINATION_UNCONFIRMED', 'A nested PTY process could not be stopped')
         for p in pathlib.Path(directory).iterdir():
             if not p.is_dir() or p.is_symlink(): p.unlink()
         pathlib.Path(directory).rmdir()

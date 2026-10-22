@@ -14,6 +14,7 @@ interface Command extends RecordValue {
   sessionId: string; exitCode: number | null; stdoutBytes: number; stderrBytes: number;
   startedAt: number; deadlineMs: number; truncated: boolean; outputComplete: boolean; cwd: string;
   inputMode?: 'closed'|'pipe'; inputSequence?: number; inputBytes?: number; stdinClosed?: boolean; inputUncertain?: boolean;
+  mode?: 'command'|'terminal'; terminalRows?:number; terminalColumns?:number;
 }
 interface Runtime { ssh: SSHConnection; busy: boolean; commandId?: string; cancelling: boolean; touched: number; job?: Promise<void>; inputBusy?: boolean; }
 interface DownloadTransfer { owner:string; viewId:string; sessionId:string; bytes:number; sha256:string; filename:string; nextOffset:number; touched:number; }
@@ -127,7 +128,7 @@ export class ShellService {
     this.viewSession(owner,viewId,sessionId);
     return this.store.recentCommands(owner,sessionId).map(c=>({commandId:c.id,displayName:c.displayName,state:c.state,exitCode:c.exitCode,
       startedAt:c.startedAt,endedAt:c.endedAt,elapsedMs:c.elapsedMs,stdoutBytes:c.stdoutBytes,stderrBytes:c.stderrBytes,
-      truncated:c.truncated,outputComplete:c.outputComplete,inputMode:c.inputMode,stdinClosed:c.stdinClosed,reason:c.reason}));
+      truncated:c.truncated,outputComplete:c.outputComplete,inputMode:c.inputMode,stdinClosed:c.stdinClosed,mode:c.mode,terminalRows:c.terminalRows,terminalColumns:c.terminalColumns,reason:c.reason}));
   }
   viewOutput(owner:string,viewId:string,commandId:string,stream:'stdout'|'stderr',cursor:number){
     const c=this.command(owner,commandId);this.viewSession(owner,viewId,c.sessionId);
@@ -203,12 +204,16 @@ export class ShellService {
     return {command:c,terminal:!['accepted','running','cancel_requested'].includes(c.state),waitedMs:Math.round(performance.now()-started)};
   }
   async sendInput(owner:string,id:string,data:string,end:boolean,key:string) {
-    const c=this.command(owner,id), scope=`input:${id}`, digest=hash(JSON.stringify([data,end]));
+    return this.publishInput(owner,id,data,end,key,`input:${id}`,'pipe');
+  }
+  private async publishInput(owner:string,id:string,data:string,end:boolean,key:string,scope:string,mode:'pipe'|'terminal') {
+    const c=this.command(owner,id), digest=hash(JSON.stringify([data,end]));
     const prior=this.store.request(owner,scope,key,digest);if(prior)return this.store.get('input',prior,owner);
     assert(!this.stopping,'SERVER_STOPPING','Server is stopping');
     assert(c.state!=='accepted','INPUT_NOT_READY','Wait until the command is running before sending input');
     assert(c.state==='running','COMMAND_FINISHED','Command is no longer accepting input');
-    assert(c.inputMode==='pipe','STDIN_DISABLED','Start this command with inputMode=pipe');
+    assert(mode==='terminal'?c.mode==='terminal':c.mode!=='terminal'&&c.inputMode==='pipe',
+      mode==='terminal'?'NOT_A_TERMINAL':'STDIN_DISABLED',mode==='terminal'?'Command is not an interactive PTY terminal':'Start this command with inputMode=pipe');
     assert(!c.stdinClosed,'STDIN_CLOSED','EOF has already been sent');
     assert(!c.inputUncertain,'INPUT_UNCERTAIN','A previous input has uncertain delivery; do not repeat it');
     this.assertAuditHealthy();
@@ -238,11 +243,42 @@ export class ShellService {
       this.store.put('input',input);this.audit('input',owner,inputId,input.state);return input;
     }finally{r.inputBusy=false;}
   }
-  async run(owner: string, id: string, command: string, key: string, waitMs=1000, deadlineMs=120000,inputMode:'closed'|'pipe'='closed',displayName?:string) {
+  async openTerminal(owner:string,sessionId:string,command:string,key:string,rows=24,columns=80,waitMs=1000,deadlineMs=120000,displayName?:string){
+    assert(command.length>0&&command.length<=65536&&!command.includes('\0'),'INVALID_COMMAND','Command must be 1 to 65536 characters without NUL bytes');
+    assert(Number.isInteger(rows)&&rows>=1&&rows<=200,'INVALID_TERMINAL_SIZE','rows must be between 1 and 200');
+    assert(Number.isInteger(columns)&&columns>=1&&columns<=500,'INVALID_TERMINAL_SIZE','columns must be between 1 and 500');
+    return this.run(owner,sessionId,command,key,waitMs,deadlineMs,'pipe',displayName??'Interactive terminal',{rows,columns});
+  }
+  async writeTerminal(owner:string,id:string,data:string,key:string){
+    const c=this.command(owner,id);assert(c.mode==='terminal','NOT_A_TERMINAL','Command is not an interactive PTY terminal');
+    const bytes=Buffer.byteLength(data);assert(bytes>0&&bytes<=2048,'INPUT_LIMIT','Terminal input must be 1 to 2048 UTF-8 bytes');
+    const event=JSON.stringify({op:'write',data:Buffer.from(data,'utf8').toString('base64')})+'\n';
+    return this.publishInput(owner,id,event,false,key,`terminal-input:${id}`,'terminal');
+  }
+  async resizeTerminal(owner:string,id:string,rows:number,columns:number,key:string){
+    const c=this.command(owner,id);assert(c.mode==='terminal','NOT_A_TERMINAL','Command is not an interactive PTY terminal');
+    assert(Number.isInteger(rows)&&rows>=1&&rows<=200,'INVALID_TERMINAL_SIZE','rows must be between 1 and 200');
+    assert(Number.isInteger(columns)&&columns>=1&&columns<=500,'INVALID_TERMINAL_SIZE','columns must be between 1 and 500');
+    const event=JSON.stringify({op:'resize',rows,columns})+'\n';
+    return this.publishInput(owner,id,event,false,key,`terminal-input:${id}`,'terminal');
+  }
+  async closeTerminal(owner:string,id:string,key:string){
+    const c=this.command(owner,id);assert(c.mode==='terminal','NOT_A_TERMINAL','Command is not an interactive PTY terminal');
+    if(!['accepted','running'].includes(c.state))return {command:c,terminal:true};
+    const event=JSON.stringify({op:'close'})+'\n';
+    const input=await this.publishInput(owner,id,event,true,key,`terminal-input:${id}`,'terminal');
+    const status=await this.waitCommand(owner,id,1000);return {input,...status};
+  }
+  readTerminal(owner:string,id:string,cursor=0,maximum=32768){
+    const c=this.command(owner,id);assert(c.mode==='terminal','NOT_A_TERMINAL','Command is not an interactive PTY terminal');
+    return {command:{commandId:c.id,state:c.state,exitCode:c.exitCode,terminalRows:c.terminalRows,terminalColumns:c.terminalColumns,
+      stdoutBytes:c.stdoutBytes,truncated:c.truncated,outputComplete:c.outputComplete,reason:c.reason},...this.readOutput(owner,id,'stdout',cursor,maximum)};
+  }
+  async run(owner: string, id: string, command: string, key: string, waitMs=1000, deadlineMs=120000,inputMode:'closed'|'pipe'='closed',displayName?:string,terminal?:{rows:number;columns:number}) {
     assert(!this.stopping,'SERVER_STOPPING','Server is stopping');
     // Keep v0.1 request hashes for the unchanged closed-input default.
     const payload:unknown[]=inputMode==='closed'?[command,deadlineMs]:[command,deadlineMs,inputMode];
-    if(displayName!==undefined)payload.push({displayName});
+    if(displayName!==undefined||terminal)payload.push({...(displayName!==undefined?{displayName}:{}),...(terminal?{terminal}: {})});
     const s = this.session(owner,id), digest = hash(JSON.stringify(payload));
     const prior = this.store.request(owner,id,key,digest); if (prior) return this.command(owner,prior);
     this.assertAuditHealthy();
@@ -250,7 +286,7 @@ export class ShellService {
     assert(deadlineMs<=this.config.limits.maxCommandMs,'INVALID_DEADLINE','Deadline exceeds server policy');
     assert(this.store.list('command').length<10000,'RESOURCE_LIMIT','Command history limit reached; expire old history before submitting more');
     const commandId=uid('c');
-    const c: Command = {id:commandId,commandId,owner,sessionId:id,state:'accepted',generation:s.generation,exitCode:null,stdoutBytes:0,stderrBytes:0,startedAt:Date.now(),deadlineMs,truncated:false,outputComplete:false,cwd:s.cwd,updatedAt:Date.now(),inputMode,inputSequence:0,inputBytes:0,stdinClosed:inputMode==='closed',...(displayName!==undefined?{displayName}:{})};
+    const c: Command = {id:commandId,commandId,owner,sessionId:id,state:'accepted',generation:s.generation,exitCode:null,stdoutBytes:0,stderrBytes:0,startedAt:Date.now(),deadlineMs,truncated:false,outputComplete:false,cwd:s.cwd,updatedAt:Date.now(),inputMode,inputSequence:0,inputBytes:0,stdinClosed:inputMode==='closed',mode:terminal?'terminal':'command',...(terminal?{terminalRows:terminal.rows,terminalColumns:terminal.columns}:{}),...(displayName!==undefined?{displayName}:{})};
     this.store.put('command',c); this.store.remember(owner,id,key,digest,c.id);
     for (const stream of ['stdout','stderr']) writeFileSync(this.outputPath(c.id,stream),'',{mode:0o600});
     r.busy=true; r.commandId=c.id; this.store.put('session',{...s,state:'busy'});
@@ -265,7 +301,8 @@ export class ShellService {
       throw new Fault('AUDIT_UNAVAILABLE','Command was not sent because its admission could not be recorded');
     }
     // Admission is durable. This job is owned by the service, never the HTTP request.
-    const job=this.execute(owner,c.id,r,command).catch(() => {}); r.job=job;
+    const executable=terminal?r.ssh.terminalCommand(commandId,command,terminal.rows,terminal.columns):command;
+    const job=this.execute(owner,c.id,r,executable).catch(() => {}); r.job=job;
     this.jobs.add(job); void job.finally(()=>this.jobs.delete(job));
     const until=performance.now()+Math.min(waitMs,10000);
     while (performance.now()<until && ['accepted','running'].includes(this.command(owner,c.id).state)) await sleep(25);

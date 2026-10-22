@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chmodSync, existsSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, statSync, utimesSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { spawn as spawnChild } from 'node:child_process';
 import { join } from 'node:path';
 import { request } from 'node:http';
 import { randomUUID } from 'node:crypto';
@@ -9,12 +10,17 @@ import { tmpdir } from 'node:os';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { ShellService } from '../src/service.js';
 import { startServer } from '../src/server.js';
-import { sleep } from '../src/core.js';
+import { sleep, quote } from '../src/core.js';
 import { fixture } from './fixture.js';
 
 async function wait(service:ShellService,id:string,owner='owner',timeout=15000){const end=Date.now()+timeout;while(Date.now()<end){const c=service.command(owner,id);if(!['accepted','running','cancel_requested'].includes(c.state))return c;await sleep(50);}throw new Error('Command did not complete');}
+async function waitTerminalText(service:ShellService,id:string,pattern:RegExp,timeout=8000){
+  const end=Date.now()+timeout;let cursor=0,text='';
+  while(Date.now()<end){const page=service.readTerminal('owner',id,cursor,32768);cursor=page.nextCursor;text+=page.content;if(pattern.test(text))return {text,cursor};await sleep(50);}
+  throw new Error(`Terminal output did not match ${pattern}: ${JSON.stringify(text)}`);
+}
 test('new SSH sessions reap only old, private, confirmed orphan worker directories',{timeout:30000},async()=>{
-  const f=await fixture(),service=new ShellService(f.config),created:string[]=[];
+  const f=await fixture(),service=new ShellService(f.config),created:string[]=[];let nestedProcess:ReturnType<typeof spawnChild>|undefined;
   const secondRoot=join(f.dir,'other-workspace');mkdirSync(secondRoot);f.config.targets.test.workspaces.other=secondRoot;
   const make=(name:string,identity?:{pid:number;start:string},old=false,withChildDirectory=false)=>{
     const path=join(tmpdir(),'shell-mcp-'+name+'-'+randomUUID());mkdirSync(path,{mode:0o700});chmodSync(path,0o700);created.push(path);
@@ -32,14 +38,20 @@ test('new SSH sessions reap only old, private, confirmed orphan worker directori
     const recent=make('recent',{pid:2147483647,start:'1'});
     const unidentified=make('unidentified',undefined,true);
     const nested=make('nested-orphan',{pid:2147483647,start:'1'},true,true);
-    const timestamp=new Date(Date.now()-26*60*60*1000);utimesSync(active,timestamp,timestamp);
+    nestedProcess=spawnChild('sleep',['30'],{detached:true,stdio:'ignore'});
+    assert.ok(nestedProcess.pid);await sleep(50);
+    const stat=readFileSync(`/proc/${nestedProcess.pid}/stat`,'utf8'),start=stat.slice(stat.lastIndexOf(')')+1).trim().split(/\s+/)[19];
+    writeFileSync(join(stale,`.pty-c_${randomUUID()}.identity`),JSON.stringify({pid:nestedProcess.pid,start}),{mode:0o600});
+    const timestamp=new Date(Date.now()-26*60*60*1000);utimesSync(stale,timestamp,timestamp);utimesSync(active,timestamp,timestamp);
     await service.open('owner','test','other','reaper-second');
     assert.equal(existsSync(stale),false,'old dead worker spool and partial upload are removed');
     assert.equal(existsSync(recent),true,'recent directory is retained');
     assert.equal(existsSync(unidentified),true,'directory without a trusted worker identity is retained');
     assert.equal(existsSync(nested),true,'unexpected nested content is retained');
     assert.equal(existsSync(active),true,'an old but live SSH worker directory is retained');
-  }finally{await service.shutdown();for(const path of created)rmSync(path,{recursive:true,force:true});await f.close();}
+    if(nestedProcess.exitCode===null&&nestedProcess.signalCode===null)await new Promise<void>(resolve=>nestedProcess!.once('exit',()=>resolve()));
+    assert.ok(nestedProcess.exitCode!==null||nestedProcess.signalCode!==null,'a confirmed orphan PTY process group is terminated before its private spool is removed');
+  }finally{if(nestedProcess?.pid){try{process.kill(-nestedProcess.pid,'SIGKILL');}catch{}}await service.shutdown();for(const path of created)rmSync(path,{recursive:true,force:true});await f.close();}
 });
 test('real OpenSSH: persistent shell, patch/test loop, output, deduplication, failures and isolation',{timeout:60000},async()=>{
   const f=await fixture(), service=new ShellService(f.config);
@@ -81,6 +93,44 @@ test('real OpenSSH: persistent shell, patch/test loop, output, deduplication, fa
   } finally {await service.shutdown();await f.close();}
 });
 
+test('real OpenSSH: remote PTY input, SIGWINCH, Ctrl+C, clean close and managed-shell continuity',{timeout:60000},async()=>{
+  const f=await fixture(),service=new ShellService(f.config);
+  try{
+    const s=await service.open('owner','test','project','pty-open');
+    const prep=await service.run('owner',s.id,"mkdir -p sub; cd sub; export PTY_STATE=preserved",'pty-prepare',100);assert.equal((await wait(service,prep.id)).exitCode,0);
+    const code="import fcntl,os,signal,struct,termios,time\ndef size():\n r,c,_,_=struct.unpack('HHHH',fcntl.ioctl(0,termios.TIOCGWINSZ,b'\\0'*8)); return r,c\ndef changed(*_):\n r,c=size(); print('RESIZED:%d:%d'%(r,c),flush=True)\nsignal.signal(signal.SIGWINCH,changed)\nr,c=size(); print('READY:%s:%d:%d'%(os.isatty(0),r,c),flush=True)\nprint('INPUT:'+repr(os.read(0,4)),flush=True)\nwhile True: time.sleep(1)";
+    const terminal=await service.openTerminal('owner',s.id,`python3 -u -c ${quote(code)}`,'pty-main',24,80,250,30000);
+    assert.equal(terminal.mode,'terminal');assert.equal(terminal.terminalRows,24);assert.equal(terminal.terminalColumns,80);
+    let output=await waitTerminalText(service,terminal.id,/READY:True:24:80/);assert.match(output.text,/READY:True:24:80/);
+    await service.resizeTerminal('owner',terminal.id,31,101,'pty-resize');
+    output=await waitTerminalText(service,terminal.id,/RESIZED:31:101/);assert.match(output.text,/RESIZED:31:101/);
+    await service.writeTerminal('owner',terminal.id,'abc\n','pty-write');
+    output=await waitTerminalText(service,terminal.id,/INPUT:b'abc\\n'/);assert.match(output.text,/INPUT:b'abc\\n'/);
+    const closed=await service.closeTerminal('owner',terminal.id,'pty-close');assert.equal('input' in closed,true);
+    assert.equal((await wait(service,terminal.id)).state,'completed');
+    assert.equal(service.session('owner',s.id).state,'ready');
+    const continuity=await service.run('owner',s.id,'printf "%s:%s" "$PWD" "$PTY_STATE"','pty-continuity',1000);
+    assert.match(service.readOutput('owner',continuity.id,'stdout').content,/\/sub:preserved$/);
+
+    const sleeper="import time; print('READY',flush=True); time.sleep(30)";
+    const interrupted=await service.openTerminal('owner',s.id,`python3 -u -c ${quote(sleeper)}`,'pty-interrupt',24,80,250,30000);
+    await waitTerminalText(service,interrupted.id,/READY/);
+    await service.writeTerminal('owner',interrupted.id,'\x03','pty-ctrl-c');
+    const interruptedResult=await wait(service,interrupted.id);assert.equal(interruptedResult.state,'completed');assert.equal(interruptedResult.exitCode,130);
+    assert.equal(service.session('owner',s.id).state,'ready');
+
+    const child="import os,subprocess,time; p=subprocess.Popen(['sleep','30']); print('PIDS:%d:%d:%d'%(os.getpid(),os.getpgrp(),p.pid),flush=True); time.sleep(30)";
+    const cancelled=await service.openTerminal('owner',s.id,`python3 -u -c ${quote(child)}`,'pty-cancel',24,80,250,30000);
+    const pids=(await waitTerminalText(service,cancelled.id,/PIDS:(\d+):(\d+):(\d+)/)).text.match(/PIDS:(\d+):(\d+):(\d+)/)!;
+    const group=Number(pids[2]),childPid=Number(pids[3]);
+    assert.equal((await service.cancel('owner',cancelled.id)).state,'cancelled');
+    const next=await service.open('owner','test','project','pty-after-cancel');
+    const scan=`python3 -c ${quote(`import os; g=${group}; a=[]\nfor p in os.listdir('/proc'):\n if p.isdigit():\n  try:\n   f=open('/proc/'+p+'/stat').read().rsplit(')',1)[1].split()\n   if f[0]!='Z' and int(f[2])==g: a.append(p)\n  except (OSError,ValueError): pass\nprint(','.join(a))`)}`;
+    const probe=await service.run('owner',next.id,scan,'pty-cleanup-probe',1000);assert.equal(probe.exitCode,0);assert.equal(service.readOutput('owner',probe.id,'stdout').content.trim(),'');
+    assert.ok(childPid>1);await service.closeSession('owner',next.id);
+  }finally{await service.shutdown();await f.close();}
+});
+
 test('multi-file patch reports a real partial filesystem failure',{timeout:30000},async()=>{
   const f=await fixture(),service=new ShellService(f.config);
   try{
@@ -108,7 +158,7 @@ test('real HTTP MCP client: authentication, remote commands and reconnect withou
     assert.equal(badHost,403);
     const legacy=await fetch(url,{method:'POST',headers:{Authorization:'Bearer '+process.env.SHELL_MCP_TEST_TOKEN,'Content-Type':'application/json',Accept:'application/json, text/event-stream','MCP-Protocol-Version':'2025-11-25'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'legacy-probe',version:'1.0'}}})});
     assert.equal(legacy.status,200);assert.match(await legacy.text(),/2025-11-25/);
-    client=await connect();assert.equal((await client.listTools()).tools.length,20);
+    client=await connect();assert.equal((await client.listTools()).tools.length,25);
     const call=async(name:string,args:Record<string,unknown>)=>{
       const r=await client!.callTool({name,arguments:args});assert.ok(!r.isError,JSON.stringify(r));return (r.structuredContent as {result:Record<string,unknown>}).result;
     };

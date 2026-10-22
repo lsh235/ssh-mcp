@@ -13,7 +13,7 @@ try {
   const port=runtime.server.address().port;
   const health=await fetch(`http://127.0.0.1:${port}/health`);if(!health.ok)throw new Error('health failed');
   await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`),{requestInit:{headers:{Authorization:'Bearer '+process.env.SHELL_MCP_SMOKE_TOKEN}}}));
-  const tools=await client.listTools();if(tools.tools.length!==20)throw new Error('tool discovery failed');
+  const tools=await client.listTools();if(tools.tools.length!==25)throw new Error('tool discovery failed');
   const result=await client.callTool({name:'list_targets',arguments:{}});if(result.isError)throw new Error('tool invocation failed');
-  console.log('PASS: compiled HTTP server health, authenticated MCP discovery and tool invocation (20 tools)');
+  console.log('PASS: compiled HTTP server health, authenticated MCP discovery and tool invocation (25 tools)');
 }finally{await client.close();await runtime.stop();delete process.env.SHELL_MCP_SMOKE_TOKEN;rmSync(dir,{recursive:true,force:true});}

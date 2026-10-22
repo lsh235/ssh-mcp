@@ -35,7 +35,21 @@ v0.2는 기존 도구 14개를 유지하고 5개를 추가해 총 19개를 제�
 
 서버 감사 로그와 SQLite에는 입력 본문을 넣지 않습니다. 원격의 임시 입력 파일에는 내용이 들어가며 명령 종료 시 정리됩니다. MCP 클라이언트의 별도 호출 기록에는 입력 인자가 남을 수 있고, 프로그램이 입력을 출력하면 stdout/stderr에도 포함됩니다.
 
-PTY·화면 앱·sudo 비밀번호 대화·Ctrl+C 전달은 지원하지 않습니다. 강제 취소는 기존처럼 셸 전체를 종료합니다.
+## PTY 대화형 프로그램 (v0.12.0)
+
+일반 `run_command`는 계속 non-PTY로 실행합니다. `vim`, `top`, REPL처럼 실제 TTY가 필요한 프로그램에는 별도 `open_terminal`을 사용합니다. 이 도구는 기존 sessionId의 관리 Bash 안에서 원격 PTY 자식 프로세스를 띄우므로 `cd`와 export 환경을 물려받고, PTY 종료 뒤에는 같은 관리 셸을 계속 사용할 수 있습니다.
+
+초기 크기는 24행×80열입니다. `read_terminal`은 병합된 출력에 ANSI 바이트를 보존하고, `write_terminal`은 입력 문자열을 그대로 보냅니다. Enter는 `\n`, Ctrl+C는 해당 앱이 처리하는 경우 U+0003 (`\u0003`)을 입력합니다. `resize_terminal`은 원격 창 크기를 바꾸고 foreground 프로세스에 SIGWINCH를 전달합니다. 요청 ID를 재사용해 응답 유실을 확인하며, 입력이 unknown이면 새 ID로 재전송하지 않습니다.
+
+```json
+{"tool":"open_terminal","arguments":{"sessionId":"SESSION_ID","command":"vim src/app.ts","clientRequestId":"terminal-open-001","rows":24,"columns":80}}
+{"tool":"read_terminal","arguments":{"commandId":"COMMAND_ID","cursor":0}}
+{"tool":"write_terminal","arguments":{"commandId":"COMMAND_ID","data":"i","clientRequestId":"terminal-input-001"}}
+{"tool":"resize_terminal","arguments":{"commandId":"COMMAND_ID","rows":40,"columns":120,"clientRequestId":"terminal-resize-001"}}
+{"tool":"close_terminal","arguments":{"commandId":"COMMAND_ID","clientRequestId":"terminal-close-001"}}
+```
+
+`close_terminal`은 PTY 프로세스 그룹에 hangup을 보내고 입력을 닫습니다. `cancel_command`나 deadline은 관리 셸과 등록된 PTY 프로세스 그룹을 끝내므로 셸 상태가 손실됩니다. 브라우저 세션 보기는 상태와 ANSI 원문 출력을 보여주지만 키 입력이 가능한 터미널 에뮬레이터는 아닙니다. 이 구현은 C에서 Python으로 controlling PTY를 만들며 SSH worker 채널 자체에는 protocol-level `pty-req`를 요청하지 않습니다. sudo 비밀번호 프롬프트와 GUI/X11은 지원 범위가 아닙니다.
 
 ## 완료 대기
 

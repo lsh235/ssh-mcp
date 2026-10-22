@@ -1,13 +1,13 @@
 # 설치·연결·운영
 
-Shell MCP 0.11.0은 원격 MCP 설치 PC(B)에서 실행합니다. B의 SSH 인증정보로 작업 대상 PC(C)에 접속합니다. Tabby 앱이나 기존 Tabby MCP 플러그인을 실행할 필요는 없습니다. 입력·검색·이력·세션 도구는 [v0.2 사용법](V02_USAGE.md), 추가 로그인과 명령 출력의 게이트 값 마스킹은 [LOGIN_SETUP](LOGIN_SETUP.md), 브라우저 상태 화면과 durable 파일 전송은 [VSCODE_BROWSER](VSCODE_BROWSER.md), 업스트림 기능 이식 흐름은 [UPSTREAM_MIGRATION](UPSTREAM_MIGRATION.md)을 참고하세요.
+Shell MCP 0.12.0은 원격 MCP 설치 PC(B)에서 실행합니다. B의 SSH 인증정보로 작업 대상 PC(C)에 접속합니다. Tabby 앱이나 기존 Tabby MCP 플러그인을 실행할 필요는 없습니다. 일반 명령과 입력·검색·세션은 [v0.2 사용법](V02_USAGE.md), 대화형 PTY와 추가 로그인·게이트 값 마스킹은 [LOGIN_SETUP](LOGIN_SETUP.md), 브라우저 상태 화면과 durable 파일 전송은 [VSCODE_BROWSER](VSCODE_BROWSER.md), 업스트림 기능 이식 흐름은 [UPSTREAM_MIGRATION](UPSTREAM_MIGRATION.md)을 참고하세요.
 
 ## 준비
 
 - B: Linux, Node.js 22.16 이상, npm, OpenSSH 클라이언트. 검증 환경은 Node.js 22.23.2입니다.
 - C: Linux, OpenSSH 서버, Bash, **Python 3.9 이상**, util-linux `setsid --wait`, `mkfifo`, 필요 빌드 도구.
 - B의 서비스 계정에서 `ssh dev-linux` 접속이 이미 준비되어 있어야 합니다. known_hosts에 신뢰할 host key를 사전 등록하고, agent 또는 키를 준비합니다.
-- SSH 자체 비밀번호·MFA 인증과 일반 PTY 명령은 지원하지 않습니다. SSH 접속 후 추가 로그인에는 postLogin 설정을 사용할 수 있습니다(최종 셸에 stty 필요). 기본 stdin은 `/dev/null`이며 일반 stdin 프로그램에는 inputMode=pipe / send_input을 사용합니다.
+- SSH 자체 비밀번호·MFA 인증은 지원하지 않습니다. 일반 `run_command`는 PTY 없이 실행하고, 화면 프로그램은 `open_terminal`이 원격 프로세스용 controlling PTY를 만듭니다. SSH 접속 후 추가 로그인에는 postLogin 설정을 사용할 수 있으며, 이후 PTY 명령도 같은 gateway-managed Bash와 환경을 사용합니다. 일반 stdin 프로그램에는 inputMode=pipe / send_input을 사용합니다.
 - 상주 서비스는 B에만 설치합니다. C의 `/tmp/shell-mcp-*`에 세션 전용 도우미·FIFO·로그가 생기고, 정상 완료한 명령 파일과 닫힌 세션 파일은 정리됩니다.
 
 ## 빌드
@@ -82,7 +82,7 @@ systemctl --user restart shell-mcp
 
 - `completed`는 명령이 종료됐다는 뜻입니다. 성공 여부는 exitCode로 판단합니다.
 - `unknown`은 실행 또는 결과가 불확실합니다. 새 요청 키로 자동 재실행하지 않습니다.
-- 강제 취소와 시간 초과는 managed 셸의 프로세스 그룹을 종료합니다. 셸 상태는 손실되며 새 세션이 필요합니다. 그룹을 이탈한 프로세스까지 회수하는 감독 기능은 없습니다.
+- 강제 취소와 시간 초과는 managed 셸 및 등록된 PTY 프로세스 그룹을 종료합니다. 셸 상태는 손실되며 새 세션이 필요합니다. PTY 그룹에서 새 세션으로 이탈한 프로세스까지 감독하지는 않습니다.
 - 종료 코드·cwd가 확정된 완료 기록을 얻기 전에는 성공으로 채우지 않습니다.
 - 재시작 시 실행 중이던 명령은 unknown, 활성 세션은 broken으로 복구합니다. 이전 Bash 프로세스의 상태 복원은 제공하지 않습니다.
 - 명령 출력은 스트림별 기본 1 MiB, 최대 설정 10 MiB로 제한합니다. 넘친 내용은 버리되 파이프는 계속 읽어 실행을 막지 않습니다. 일반 빌드 파일의 크기는 제한하지 않습니다.

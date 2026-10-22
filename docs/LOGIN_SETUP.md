@@ -101,11 +101,11 @@ MCP 주소와 도구 인자는 기존과 같습니다.
 
 ## 실행 방식과 지원 한계
 
-추가 로그인 대상은 로그인용 PTY 채널 하나를 열고 그 **동일 채널**을 계속 사용합니다. 로그인 완료 후 raw/no-echo로 전환하고 일시적인 Python 제어 프로세스를 시작해 파일 도우미와 비 PTY Bash worker를 관리합니다. 별도 실행 채널을 열어 게이트를 우회하지 않습니다. 개발 명령 자체는 기존처럼 PTY 없이 실행됩니다.
+추가 로그인 대상은 로그인용 PTY 채널 하나를 열고 그 **동일 채널**을 계속 사용합니다. 로그인 완료 후 raw/no-echo로 전환하고 일시적인 Python 제어 프로세스를 시작해 파일 도우미와 비 PTY Bash worker를 관리합니다. 별도 실행 채널을 열어 게이트를 우회하지 않습니다. 일반 개발 명령은 PTY 없이 실행하며, `open_terminal`만 같은 worker 안에서 원격 자식 PTY를 엽니다. 인증 채널을 새로 만들지 않습니다.
 
-최종 셸에서 Linux, Bash, Python >=3.9, stty, /proc, workspace 쓰기와 실행이 가능해야 합니다. 관리 명령을 실행할 수 없는 메뉴 전용 장비, Windows 셸, 화면 앱, 동적 OTP, CAPTCHA, 달라지는 대화 분기는 지원하지 않습니다. 일반 PTY 개발 명령·터미널 크기 변경도 지원하지 않습니다.
+최종 셸에서 Linux, Bash, Python >=3.9, stty, /proc, workspace 쓰기와 실행이 가능해야 합니다. 관리 명령을 실행할 수 없는 메뉴 전용 장비, Windows 셸, 동적 OTP, CAPTCHA, 달라지는 대화 분기는 지원하지 않습니다. 화면형 POSIX 프로그램은 별도 `open_terminal` 도구로 실행할 수 있습니다. 이 PTY의 resize·입력·종료 제한은 [V02_USAGE](V02_USAGE.md)를 참조하세요.
 
-제어 채널 단절 시 명령은 unknown으로 처리할 수 있고 자동 재실행하지 않습니다. 종료 시 worker 그룹을 정리하며, gateway가 비정상 종료하면 PID/시작 시각을 검사하는 watchdog도 worker 그룹을 종료합니다. 사용자가 별도 session/process group으로 분리한 프로그램까지 회수하는 기능은 아닙니다.
+제어 채널 단절 시 명령은 unknown으로 처리할 수 있고 자동 재실행하지 않습니다. 종료 시 worker와 등록된 PTY 프로세스 그룹을 정리하며, gateway가 비정상 종료하면 PID/시작 시각을 검사하는 watchdog이 worker 그룹을 종료합니다. 사용자가 별도 session/process group으로 이탈시킨 프로그램까지 감독하는 기능은 아닙니다.
 
 연결 옵션은 [OpenSSH PTY·escape 설정](https://man.openbsd.org/ssh)을 사용합니다. 상주 원격 서비스나 새 수신 포트를 추가하지 않습니다.
 

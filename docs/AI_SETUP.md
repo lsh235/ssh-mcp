@@ -128,7 +128,7 @@ VS Code에서 `MCP: Add Server`의 HTTP 방식으로 등록할 수도 있습니�
 
 아래는 HTTP 요청 본문이 아니라 **MCP 도구 이름과 arguments**입니다. 클라이언트가 표시하는 도구 접두사는 다를 수 있습니다. 호출 결과는 `structuredContent.result` 또는 JSON text의 `result`에 있으며 오류는 `isError`와 `error.code`로 확인합니다. ID·해시·커서는 실제 반환값을 사용합니다. 예시의 clientRequestId도 설치 시도별 고유 값(예: UUID 접두사)으로 바꿉니다. 같은 작업의 응답 유실을 확인할 때만 기존 ID를 그대로 재사용합니다.
 
-1. 도구 목록을 발견하고 `list_targets({})`를 호출합니다. 현재 버전은 20개 도구입니다.
+1. 도구 목록을 발견하고 `list_targets({})`를 호출합니다. 현재 버전은 25개 도구이며, 대화형 TUI에는 별도의 `open_terminal` 도구를 사용합니다.
 2. `list_sessions({})`에서 같은 대상의 사용 가능한 소유 세션을 확인합니다. 새 세션이 필요할 때 아래를 호출합니다.
 
 ```json
@@ -180,7 +180,7 @@ stderr도 별도의 cursor=0부터 조회합니다. 실행이 끝났고 nextCurs
 | 파일 버전 충돌 / partial_apply | 변경 파일을 다시 읽고 실제 상태 확인 후 새 패치 생성 |
 | 출력 truncated / 검색 incomplete | 누락을 명시. 더 작은 범위나 더 적은 출력을 요청하여 확인 |
 
-PTY, 화면 앱, sudo 비밀번호 입력, Ctrl+C 전달은 지원하지 않습니다. 입력·출력·재열기 세부 계약은 [V02_USAGE](V02_USAGE.md)를 따릅니다.
+일반 `run_command`는 non-PTY입니다. 화면형 프로그램은 `open_terminal`로 분리된 원격 PTY를 열고 `read_terminal`/`write_terminal`/`resize_terminal`/`close_terminal`을 같은 commandId로 사용합니다. Ctrl+C는 문자열 U+0003으로 보낼 수 있습니다. PTY 출력은 stdout 하나로 합쳐지며 browser 보기는 터미널 입력 UI가 아닙니다. sudo 비밀번호 프롬프트와 GUI/X11은 지원하지 않습니다. 입력·출력·재열기 세부 계약은 [V02_USAGE](V02_USAGE.md)를 따릅니다.
 
 ## 7. 다른 AI에 전달할 시작 프롬프트
 

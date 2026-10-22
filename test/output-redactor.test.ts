@@ -34,6 +34,19 @@ test('masks a recognizable secret prefix at stream end and is idempotent',()=>{
   assert.equal(redactor.finish().length,0);
 });
 
+test('emits PTY output promptly unless its tail can still become a configured secret',()=>{
+  const secret='fixture $() ` ~\\! 한글';
+  const redactor=new SecretOutputRedactor(['fixture-user',secret]);
+  const input=Buffer.from(`READY:True:fixture-user\r\nSECRET:${secret}`);
+  const visible=redactor.push(input);
+  assert.deepEqual(visible,Buffer.from(`READY:True:${'*'.repeat(Buffer.byteLength('fixture-user'))}\r\nSECRET:${'*'.repeat(Buffer.byteLength(secret))}`));
+  assert.equal(redactor.finish().length,0);
+  const partial=new SecretOutputRedactor([secret]);
+  const prefix=Buffer.from('screen text '+secret.slice(0,5));
+  assert.equal(partial.push(prefix).toString(),'screen text ');
+  assert.equal(partial.finish().toString(),'*'.repeat(5));
+});
+
 test('does not delay or modify output when no gate values are configured',()=>{
   const redactor=new SecretOutputRedactor([]);
   const input=Buffer.from([0,0x61,0xff]);

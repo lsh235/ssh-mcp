@@ -38,7 +38,8 @@
 | P6 / v0.9.0 구현 | A→B 브라우저 청크 업로드 재개·취소 | tus protocol의 offset mismatch 409와 Termination DELETE 원칙, tus-js-client FAQ의 resume identity와 sent/accepted progress 구분 | 1 MiB SHA-256 청크, prefix 재검증, B의 private staging, 서버 확인 offset, 응답 유실 재시도, 미완료 staging DELETE, 기존 B→C 경로로 구현. B→C 실행 중 취소·브라우저/MCP 재시작 복구·tus 호환성은 보류 |
 | P7 / v0.10.0 구현 | 브라우저 종료·MCP 재시작 뒤 업로드 재개 | tus-js-client FAQ는 Web Storage의 upload identity로 브라우저를 닫은 뒤 재개할 수 있다고 설명함. Node `FileHandle.sync()`와 현재 SQLite WAL + `synchronous=FULL`을 결합해 host staging과 offset을 내구성 있게 기록 | `localStorage`에는 비밀 아닌 요청 ID만 저장. SQLite manifest, fsync된 staging, 24시간 idle expiry, 크기 제한을 적용. 새 MCP 세션으로 재결합할 때 소유자·대상·workspace root·경로가 모두 같아야 함. 서버 재시작 시 SSH 셸은 복원하지 않고 publish 불확실 상태는 자동 재실행하지 않음 |
 | P8 / v0.11.0 구현 | postLogin 값의 명령 출력 마스킹 | `tufantunc/ssh-mcp` main `5c5b8476492cda568fca779b307ff8a2ca0bbbb7`의 [변경 기록](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/CHANGELOG.md)은 설정된 sudo 비밀번호를 명령 출력에서 제거하는 보완을 기록함. 이 서버도 B에 보관된 postLogin 값이 원격 명령 출력으로 되돌아올 수 있음 | 실제 postLogin 값만 stdout/stderr 저장 전에 바이트 단위로 마스킹. 청크를 넘는 값·끝부분의 미완전 접두부를 처리하고 byte cursor 길이는 보존. MCP·브라우저 공통 출력 저장 경로에서 격리 SSH 시험. 전역 파일 읽기·로그 전체 필터나 패턴 기반 비밀 탐지는 하지 않음 |
-| P9 / 조사 필요 | PTY 기반 대화형 프로그램 | 현재 명령은 재현성 있는 non-PTY Bash를 기본으로 함. TUI/REPL 사용 요청이 확인되면 추가 이점이 있음 | PTY를 기존 managed shell과 분리된 세션 모드로 평가하고 terminal resize, ANSI 출력, interrupt, 게이트 입력, 세션 유실 시험을 설계 |
+| P9 / v0.12.0 구현 | PTY 기반 대화형 프로그램 | [RFC 4254](https://datatracker.ietf.org/doc/html/rfc4254)의 `pty-req`·`window-change`, 고정한 Tabby `shellChannel.ts`의 xterm-256color/80×24, `tufantunc/ssh-mcp`의 세션 수명 관리 아이디어를 확인 | 별도 `open_terminal` 모드가 원격 Linux에서 controlling PTY를 만들고 같은 managed Bash의 cwd/env를 상속. read/write/resize/close 도구, SIGWINCH, stdout/stderr 병합, postLogin 같은 채널, 등록된 PTY process-group cancel/reaper를 실제 격리 OpenSSH로 시험. SSH 채널 자체는 non-PTY이며 browser는 terminal UI가 아님 |
+| P10 / 조사 필요 | 브라우저 터미널 렌더링·입력 옵션 | v0.12는 브라우저가 ANSI 출력과 실행 상태를 읽지만 키 입력은 MCP 도구를 통해서만 가능 | VS Code Integrated Browser에서 출력을 렌더링할 때 안전한 ANSI 처리와 사용자 입력·재인증·뷰 권한 경계를 조사. 별도 공개 WebSocket이나 인증 우회를 추가하지 않음 |
 | 보류 | 업스트림의 직접 SSH credential/profile, 임의 HTTP 상태 화면, 명령 문자열 위험 분류 | 본 프로젝트는 설치 PC의 OpenSSH config·키·agent, 기존 소유권 보호, 인증된 읽기 전용 브라우저 뷰가 요구됨. 원본 SECURITY 문서에는 classifier bypass 관련 공개 권고가 여러 개 있음 | 요구사항이 바뀌지 않는 한 현재 모델을 대체하지 않음 |
 
 ## 2026-10-22 현재 조사 입력
@@ -65,6 +66,14 @@
 - Shell MCP에는 sudo 도구가 없으므로 postLogin의 B측 파일/환경변수 값을 동일한 개념으로 적용하되, 셸 worker가 수집한 stdout/stderr만 exact-byte matcher로 처리합니다. A/B viewer와 MCP가 공유하는 출력 파일에 마스킹한 뒤 저장하므로 비밀은 원래 명령 출력 API에 도달하지 않습니다.
 - 마스킹은 설정값이 바이트 단위로 그대로 출력된 경우만 다룹니다. ANSI 삽입·인코딩/문자 치환, `read_file`, 명령 인자·대상 자체 로그, 게이트 비밀이 청크를 가로질러 여러 별도 명령으로 나뉜 경우는 범위 밖입니다. 일치한 바이트 수를 보존하고 마지막 미완전 접두부도 숨겨 기존 cursor와 잘림 경계의 일부 노출을 방지합니다.
 - 출력 재생성·단위 시험과 실제 격리 postLogin/OpenSSH 시험으로 stdout/stderr, polling 경계, UTF-8 바이트 cursor, 일반 SSH의 무변경을 확인합니다. 코드 복사와 런타임 의존성은 없습니다.
+
+## 2026-10-22 v0.12.0 라운드
+
+- 고정한 [Tabby `shellChannel.ts`](https://github.com/Eugeny/tabby/blob/467ce8ebfa467fb88cf6d154c9a5891e3d3647f0/tabby-ssh/src/session/shellChannel.ts)는 PTY 요청과 셸 채널을 분리하고 `xterm-256color`, 80×24 초기 크기를 사용합니다. [RFC 4254 §§6.2, 6.7](https://datatracker.ietf.org/doc/html/rfc4254)는 SSH `pty-req`와 `window-change`를 정의합니다.
+- 고정한 [`tufantunc/ssh-mcp` README](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/README.md)와 [세션 관리자](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/src/ssh/session-manager.ts)는 이름 있는 stateful/background 작업과 세션 제한·정리 아이디어를 확인하는 데 사용했습니다. 이는 Shell MCP의 B측 OpenSSH host 설정, workspace 소유권, postLogin gateway를 대체하는 배치 모델은 아닙니다.
+- `open_terminal`은 C의 Python 3.9 `pty.openpty()`로 controlling PTY 자식을 만들고, 기존 managed Bash의 cwd/env를 상속합니다. 기존 MCP output spool/redactor와 input journal을 재사용하므로 postLogin channel에 다시 인증하지 않습니다. `read_terminal`, `write_terminal`, `resize_terminal`, `close_terminal`이 commandId에 연결되고, close/cancel/고아 정리에서 검증된 child process identity와 process group을 확인합니다.
+- 별도 PTY 통합 시험에서 tty 인식, 초기 행/열, resize 후 SIGWINCH, UTF-8 입력, Ctrl+C, 종료 후 Bash 환경 보존, 강제 취소와 오래된 worker directory reaper의 PTY 프로세스 정리를 확인합니다. postLogin fixture에서 PTY 안의 게이트 값 출력도 마스킹하고 같은 SSH 채널이 유지되는지 확인합니다. 전체 `npm run check`, `npm run smoke`, 121초 `npm run test:soak`가 PASS입니다.
+- 구현은 Tabby나 tufantunc 코드 복사가 아닙니다. 원격 PTY를 셸에서 띄우므로 SSH connection channel 자체에 protocol `pty-req`를 요청하지 않습니다. 앱에는 POSIX controlling TTY와 크기/SIGWINCH가 제공되지만, SSH 클라이언트가 원격 PTY를 직접 소유하는 것과 동일하지 않습니다. PTY 출력은 stdout 하나로 합쳐지고 브라우저는 ANSI-aware terminal emulator/input surface를 제공하지 않습니다.
 
 ## 2026-10-22 v0.7 라운드
 
