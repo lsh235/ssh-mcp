@@ -25,6 +25,15 @@ export class Store {
     this.db.prepare('INSERT OR REPLACE INTO records VALUES(?,?,?,?)').run(kind, row.id, row.owner, JSON.stringify(row));
     return row;
   }
+  putWithRequest(kind:string,row:RecordValue,scope:string,key:string,digest:string,result:string) {
+    row.updatedAt=Date.now();
+    const save=this.db.transaction(()=>{
+      if(kind==='command')this.db.prepare('INSERT OR IGNORE INTO command_order(id,owner) VALUES(?,?)').run(row.id,row.owner);
+      this.db.prepare('INSERT OR REPLACE INTO records VALUES(?,?,?,?)').run(kind,row.id,row.owner,JSON.stringify(row));
+      this.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?)').run(row.owner,scope,key,digest,result);
+    });
+    save();return row;
+  }
   get(kind: string, id: string, owner: string): RecordValue {
     const row = this.db.prepare('SELECT data FROM records WHERE kind=? AND id=? AND owner=?').get(kind, id, owner) as {data: string} | undefined;
     if (!row) throw new Fault('NOT_FOUND', 'Resource not found or not owned by this principal');
@@ -53,6 +62,13 @@ export class Store {
   }
   remember(owner: string, scope: string, key: string, digest: string, result: string) {
     this.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?)').run(owner, scope, key, digest, result);
+  }
+  removeWithRequest(kind:string,id:string,owner:string,scope:string,key:string) {
+    const remove=this.db.transaction(()=>{
+      this.db.prepare('DELETE FROM records WHERE kind=? AND id=? AND owner=?').run(kind,id,owner);
+      this.db.prepare('DELETE FROM requests WHERE owner=? AND scope=? AND key=?').run(owner,scope,key);
+    });
+    remove();
   }
   close() { this.db.close(); }
 }

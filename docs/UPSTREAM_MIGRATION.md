@@ -36,7 +36,7 @@
 | v0.8.1 구현 / 재개는 보류 | 재시작 뒤 고아 transfer spool 정리 | 업스트림 SFTP는 실패 `.part`를 정리하지만 이어쓰기 재개는 제공하지 않음. OpenBSD `sftp -a`는 부분 내용 불일치 시 손상 가능성을 경고 | 새 SSH worker가 24시간 지난 private 작업 디렉터리에서 죽은 PID/start-time을 확인해 비재귀 정리. 활성·최근·신원 불명·예상 밖 파일 구조는 보존. 자동 resume는 source/checksum/remote identity/progress journal과 client 재선택 경험을 별도 설계할 때까지 보류 |
 | P5 / v0.8.2 구현 | B→C 사용자 재시도 업로드 | tus offset 원칙과 고정 검토한 ssh-mcp-toolkit의 `.part` 크기·최종 SHA-256 흐름을 참고 | 같은 살아 있는 SSH 세션 안에서 확인된 remote prefix SHA-256을 비교하고 불일치 시 처음부터 재전송. 서버·SSH 재시작을 넘는 resume은 제공하지 않음 |
 | P6 / v0.9.0 구현 | A→B 브라우저 청크 업로드 재개·취소 | tus protocol의 offset mismatch 409와 Termination DELETE 원칙, tus-js-client FAQ의 resume identity와 sent/accepted progress 구분 | 1 MiB SHA-256 청크, prefix 재검증, B의 private staging, 서버 확인 offset, 응답 유실 재시도, 미완료 staging DELETE, 기존 B→C 경로로 구현. B→C 실행 중 취소·브라우저/MCP 재시작 복구·tus 호환성은 보류 |
-| P7 / 조사 필요 | 브라우저 종료·MCP 재시작 뒤 업로드 재개 | tus-js-client FAQ는 Web Storage로 upload identity를 찾아 브라우저 종료 뒤 이어갈 수 있다고 설명함. Shell MCP는 staging metadata가 메모리에 있어 브라우저 저장소만 늘려도 B 재시작 뒤 복구되지 않음 | 서버 측 durable journal, owner/view/session 검증, expiry·disk quota, SSH 세션 재개 불가 시 transfer rebind 모델을 설계. 인증 토큰은 브라우저 저장소에 저장하지 않음 |
+| P7 / v0.10.0 구현 | 브라우저 종료·MCP 재시작 뒤 업로드 재개 | tus-js-client FAQ는 Web Storage의 upload identity로 브라우저를 닫은 뒤 재개할 수 있다고 설명함. Node `FileHandle.sync()`와 현재 SQLite WAL + `synchronous=FULL`을 결합해 host staging과 offset을 내구성 있게 기록 | `localStorage`에는 비밀 아닌 요청 ID만 저장. SQLite manifest, fsync된 staging, 24시간 idle expiry, 크기 제한을 적용. 새 MCP 세션으로 재결합할 때 소유자·대상·workspace root·경로가 모두 같아야 함. 서버 재시작 시 SSH 셸은 복원하지 않고 publish 불확실 상태는 자동 재실행하지 않음 |
 | P8 / 조사 필요 | PTY 기반 대화형 프로그램 | 현재 명령은 재현성 있는 non-PTY Bash를 기본으로 함. TUI/REPL 사용 요청이 확인되면 추가 이점이 있음 | PTY를 기존 managed shell과 분리된 세션 모드로 평가하고 terminal resize, ANSI 출력, interrupt, 게이트 입력, 세션 유실 시험을 설계 |
 | 보류 | 업스트림의 직접 SSH credential/profile, 임의 HTTP 상태 화면, 명령 문자열 위험 분류 | 본 프로젝트는 설치 PC의 OpenSSH config·키·agent, 기존 소유권 보호, 인증된 읽기 전용 브라우저 뷰가 요구됨. 원본 SECURITY 문서에는 classifier bypass 관련 공개 권고가 여러 개 있음 | 요구사항이 바뀌지 않는 한 현재 모델을 대체하지 않음 |
 
@@ -48,6 +48,15 @@
 - [현재 VS Code MCP 안내](https://code.visualstudio.com/api/extension-guides/ai/mcp)는 Elicitation과 `readOnlyHint`가 아닌 도구의 실행 확인을 설명합니다. 이는 사용자 PC의 실제 Copilot harness에서 서버 측 승인 요청이 동작한다는 증거가 아니며, 해당 연결은 아직 NOT RUN입니다.
 - [VS Code MCP 서버 설정](https://code.visualstudio.com/docs/agent-customization/mcp-servers)과 [MCP Elicitation API](https://code.visualstudio.com/api/extension-guides/ai/mcp). 이 문서가 기능을 설명한다는 사실은 현재 PC의 Copilot 버전·정책이 승인 UI를 실제 표시한다는 수용 증거가 아닙니다.
 - 상세 관찰·채택 판단은 [UPSTREAM_REVIEW](UPSTREAM_REVIEW.md)에 있습니다. 조사 당시 원본을 실행하지 않았으므로 원본 코드의 동작 검증으로 간주하지 않습니다.
+
+## 2026-10-22 v0.10.0 라운드
+
+- [tus-js-client FAQ](https://github.com/tus/tus-js-client/blob/main/docs/faq.md)와 [사용 안내](https://github.com/tus/tus-js-client/blob/main/docs/usage.md)는 fingerprint와 Web Storage의 upload identity를 통해 브라우저를 닫았다 다시 연 뒤 같은 파일을 재선택해 이어가는 패턴을 설명합니다. 이를 복사하지 않고 현재 view API의 Bearer 인증·요청 ID에 맞게 적용했습니다.
+- Node.js [FileHandle.sync()](https://nodejs.org/api/fs.html#filehandlesync)는 파일 데이터의 sync를 제공하고, SQLite [WAL](https://sqlite.org/wal.html)과 [`synchronous=FULL`](https://sqlite.org/pragma.html#pragma_synchronous)은 커밋 내구성 설정의 근거입니다. Shell MCP의 staging 파일을 먼저 sync하고 그다음 SQLite에 confirmed offset을 기록합니다.
+- `.state`의 기존 Store를 이용해 요청 ID·manifest·owner·target/workspace/root/path·confirmed offset·staging 이름·상태·완료 영수증을 저장했습니다. 파일 데이터 자체와 토큰은 브라우저 storage나 SQLite manifest에 넣지 않습니다.
+- MCP 재시작은 SSH 셸을 끊으므로 파일을 자동으로 C에 publish하지 않습니다. A→B 업로드가 대기 중이면 새 SSH session과 새 view가 같은 owner·target·workspace root·path를 확인한 뒤 명시적으로 staging에 재결합합니다. publish 도중 재시작이면 결과를 `unknown`으로 남기고 자동 재호출을 거부합니다.
+- staging은 idle 24시간 뒤 만료되며 기존 파일 한도·동시 업로드·총 staging 한도를 계속 적용합니다. 격리 OpenSSH 통합 시험은 청크 offset 저장, MCP 서버 인스턴스 교체, 새 세션 재결합, 다른 workspace 거부, 완료 영수증 복구와 uncertain publish 재실행 금지를 확인합니다. 프로세스 재기동 시험은 OS 전원 손실·디스크 고장 증거가 아니며 실제 VS Code Integrated Browser/Copilot 수용은 별도입니다.
+- 코드 복사나 새 runtime dependency는 없습니다.
 
 ## 2026-10-22 v0.7 라운드
 
@@ -84,4 +93,4 @@
 - 그래서 확인되지 않은 바이트 이어쓰기를 추가하지 않고, 새 `prepare` 시 24시간 이상 지난 private remote worker directories 중 worker PID/start-time이 죽은 것으로 확인된 것만 비재귀 삭제합니다. 활성 PID, 최근 항목, identity 누락, 중첩/특수 파일은 보존합니다. 이전 결과는 계속 `unknown`이며 실행을 replay하지 않습니다.
 - 코드는 upstream에서 복사하지 않았습니다. 실제 격리 OpenSSH 시험은 stale 삭제, 오래된 live worker 보존, 최근/identity 없는/중첩 경로 보존을 확인합니다.
 
-기능 백로그는 매 라운드 새 웹 근거와 사용자 요구로 다시 정렬합니다. 다음 후보는 브라우저를 닫거나 MCP 호스트를 재시작한 뒤 A→B upload를 복원하는 durable staging journal입니다. sessionStorage만 localStorage로 바꾸지 않고 owner·view·session 검증, 용량 제한, 만료와 SSH 세션 rebind의 한계를 먼저 설계합니다.
+기능 백로그는 매 라운드 새 웹 근거와 사용자 요구로 다시 정렬합니다. 다음 후보는 P8의 제한된 PTY 세션입니다. 기존 non-PTY 실행 모델의 안정성을 건드리지 않고 분리된 세션 모드에서 resize, terminal output, interrupt, postLogin 입력과 reconnect 후 상태를 조사합니다.

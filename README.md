@@ -2,11 +2,11 @@
 
 VS Code의 Copilot이 원격 프로젝트를 읽고 수정하고, 같은 SSH 셸에서 명령과 테스트를 반복하도록 돕는 원격 MCP 서버입니다.
 
-**현재 상태: v0.9.0 구현. MCP 도구 20개, 여러 SSH 세션, 브라우저 상태 화면, 제한된 원격 workspace 파일 목록과 재개 가능한 체크섬 검증 파일 전송을 제공합니다. 실제 사용자 PC의 Copilot·VS Code Browser·외부 IdP·공개 HTTPS 배포는 미검증입니다.**
+**현재 상태: v0.10.0 구현. MCP 도구 20개, 여러 SSH 세션, 브라우저 상태 화면, 제한된 원격 workspace 파일 목록과 브라우저 종료·MCP 재시작을 넘는 체크섬 검증 업로드 재개를 제공합니다. 실제 사용자 PC의 Copilot·VS Code Browser·외부 IdP·공개 HTTPS 배포는 미검증입니다.**
 
 VS Code Browser에서 현재 대화의 원격 작업을 보고 파일을 직접 옮기려면 [브라우저 세션 보기와 파일 전송](docs/VSCODE_BROWSER.md)을 따릅니다. AI가 create_session_view로 이번 대화의 세션 ID만 묶어 링크를 만들고, 사용자가 인증한 뒤 업로드 파일을 직접 선택하거나 원격 파일을 내려받습니다. 파일 바이트는 MCP 도구 결과나 AI 문맥으로 전달하지 않습니다. [v0.4 화면 설계](docs/V04_STATUS.md)와 [v0.8 전송 검증](docs/V08_STATUS.md)을 참고하세요.
 
-오픈소스의 유용한 기능을 계속 조사하고 이 프로젝트의 배치·보안 경계에 맞춰 이식하기 위한 기준은 [업스트림 기능 조사와 마이그레이션 절차](docs/UPSTREAM_MIGRATION.md)에 기록합니다. v0.7 bounded metadata listing, v0.8 브라우저 파일 전송, v0.8.1 고아 작업 디렉터리 정리, v0.8.2 SSH 구간 재개에 이어 v0.9.0은 MCP 호스트까지의 브라우저 업로드를 확인된 청크 offset부터 재개하고 미완료 staging을 취소합니다. [v0.9.0 검증 기록](docs/V09_STATUS.md)에서 적용 근거와 제한을 확인하세요.
+오픈소스의 유용한 기능을 계속 조사하고 이 프로젝트의 배치·보안 경계에 맞춰 이식하기 위한 기준은 [업스트림 기능 조사와 마이그레이션 절차](docs/UPSTREAM_MIGRATION.md)에 기록합니다. v0.9.0은 A→B 브라우저 청크 재개와 취소를, v0.10.0은 브라우저 저장소와 SQLite 기반 durable journal, 서버 재시작 후 새 SSH 세션 재결합을 추가합니다. 불확실한 B→C 게시 결과는 자동 재실행하지 않습니다. [v0.10.0 검증 기록](docs/V010_STATUS.md)에서 적용 근거와 제한을 확인하세요.
 
 추가 로그인 화면에 미리 준비한 값을 Enter와 함께 보내려면 [추가 로그인 설정](docs/LOGIN_SETUP.md)과 [설정 예시](examples/config.post-login.example.json)를 사용합니다. 비밀은 MCP 설치 PC의 전용 파일·환경변수에서 읽습니다. [v0.3 검증 결과](docs/V03_STATUS.md)를 참고하세요.
 
@@ -71,6 +71,7 @@ MCP를 설치하는 곳은 B입니다. C에는 기존 SSH 서버와 Bash·Python
 - [v0.8.1 고아 전송 정리 검증](docs/V081_STATUS.md): 오래된 원격 임시 파일을 활성 세션과 분리해 정리
 - [v0.8.2 확인된 업로드 재개](docs/V082_STATUS.md): browser request ID 복구, 원격 prefix SHA-256과 재개 경계
 - [v0.9.0 브라우저 업로드 재개·취소](docs/V09_STATUS.md): 브라우저→MCP 호스트의 확인된 청크 offset, prefix 재검증과 취소 경계
+- [v0.10.0 durable 업로드 재개](docs/V010_STATUS.md): 브라우저 종료·MCP 재시작 복구, 새 SSH 세션 재결합과 uncertain publish 경계
 - [v0.5 감사 체인 검증](docs/V05_STATUS.md): 감사 로그 전환·검증·제한 사항
 - [대화형 구조도](docs/architecture.html): 연결 구조와 서버별 책임
 - [구조도 검증 기록](docs/DIAGRAM_QA.md): 문서 산출물 검증과 실제 제품 검증의 구분

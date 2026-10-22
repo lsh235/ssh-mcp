@@ -1,5 +1,15 @@
 # 오픈소스 조사 근거
 
+## 2026-10-22 v0.10.0: 브라우저 종료·MCP 재시작 뒤 업로드 복원
+
+[tus-js-client FAQ](https://github.com/tus/tus-js-client/blob/main/docs/faq.md)와 [사용 안내](https://github.com/tus/tus-js-client/blob/main/docs/usage.md)는 파일 identity와 Web Storage의 upload reference를 이용해 브라우저를 닫은 뒤 같은 파일을 다시 골라 이어가는 방식을 설명합니다. Shell MCP는 localStorage에 Bearer token이나 파일 내용을 저장하지 않고, origin 안에서 target/workspace/path/file identity와 연결되는 UUID 요청 ID만 저장합니다.
+
+[Node FileHandle.sync()](https://nodejs.org/api/fs.html#filehandlesync)는 업로드 청크 데이터를 sync한 뒤 confirmed offset을 SQLite에 반영하도록 사용합니다. 기존 [SQLite WAL](https://sqlite.org/wal.html) 및 [`synchronous=FULL`](https://sqlite.org/pragma.html#pragma_synchronous) 설정과 함께 host-side journal을 만듭니다. 실제 filesystem power-loss durability는 본 라운드의 시험 범위가 아닙니다.
+
+저장된 대기 upload는 24시간 idle 뒤 만료됩니다. MCP 서버 재시작은 SSH shell을 복원하지 않기 때문에 사용자는 새 SSH session과 새 browser view를 만들어 같은 소유자·target·workspace root·path를 제시해야 staging을 재결합할 수 있습니다. manifest가 달라지거나 다른 workspace를 쓰면 충돌을 반환합니다. publish marker 뒤 서버가 재시작되면 staging을 다시 실행하지 않고 `TRANSFER_UNKNOWN`으로 응답해 원격 상태 확인을 요구합니다. remote target C에 성공 여부가 불확실한 파일을 자동 덮어쓰지 않습니다.
+
+실제 isolated OpenSSH 통합 시험은 offset 복구와 새 session rebind, 다른 workspace 거부, 완료 receipt 복구, uncertain publish 재실행 금지를 확인합니다. VS Code Desktop Integrated Browser/Copilot과 전원 손실/디스크 고장 시험은 이 검증에 포함하지 않았습니다. upstream 코드를 복사하거나 의존성을 추가하지 않았습니다.
+
 ## 2026-10-22 v0.9.0: 브라우저→호스트 업로드 재개 조사
 
 [tus resumable upload protocol 1.0](https://tus.io/protocols/resumable-upload)은 현재 서버 offset과 다른 PATCH에 409를 반환하고 자원을 변경하지 않으며, 성공한 PATCH에서 서버가 확정한 `Upload-Offset`을 돌려주도록 규정합니다. [tus-js-client FAQ](https://github.com/tus/tus-js-client/blob/main/docs/faq.md)는 fingerprint로 이전 upload URL을 Web Storage에서 찾아 재개하는 흐름을 설명하고, 네트워크로 보낸 진행률과 서버가 수락한 chunk 완료를 구분합니다.

@@ -44,8 +44,33 @@ export class ShellService {
       mkdirSync(join(config.stateDir, 'outputs'), { recursive:true, mode:0o700 });
       const transferDir=join(config.stateDir,'transfers');
       mkdirSync(transferDir,{recursive:true,mode:0o700});chmodSync(transferDir,0o700);
+      const uploadCutoff=Date.now()-Math.max(config.limits.transferTimeoutMs,24*60*60*1000),retainedUploads=new Set<string>();
+      for(const row of this.store.list('browser-upload')){
+        const requestId=typeof row.requestId==='string'?row.requestId:'';
+        if(typeof row.touched!=='number'||row.touched<uploadCutoff){
+          this.store.removeWithRequest('browser-upload',row.id,row.owner,'browser-upload',requestId);continue;
+        }
+        if(row.state==='publishing'){
+          this.store.put('browser-upload',{...row,state:'unknown',reason:'SERVER_RESTART',temporaryName:''});continue;
+        }else if(!['uploading','unknown','completed'].includes(row.state)){
+          this.store.removeWithRequest('browser-upload',row.id,row.owner,'browser-upload',requestId);continue;
+        }
+        if(row.state==='uploading'||row.state==='unknown'){
+          const name=row.temporaryName;
+          if(typeof name!=='string'||!/^([a-f0-9]{8}-[a-f0-9-]{27})\.upload$/.test(name)){
+            if(row.state==='uploading')this.store.removeWithRequest('browser-upload',row.id,row.owner,'browser-upload',requestId);
+            else this.store.put('browser-upload',{...row,temporaryName:''});
+            continue;
+          }
+          try{if(!lstatSync(join(transferDir,name)).isFile())throw new Error('not-file');retainedUploads.add(name);}
+          catch{
+            if(row.state==='uploading')this.store.removeWithRequest('browser-upload',row.id,row.owner,'browser-upload',requestId);
+            else this.store.put('browser-upload',{...row,temporaryName:''});
+          }
+        }
+      }
       for(const entry of readdirSync(transferDir,{withFileTypes:true}))if(entry.isFile()&&entry.name.endsWith('.upload')){
-        const path=join(transferDir,entry.name);if(lstatSync(path).isFile())rmSync(path);
+        const path=join(transferDir,entry.name);if(lstatSync(path).isFile()&&!retainedUploads.has(entry.name))rmSync(path);
       }
     } catch (error) {
       this.auditLog.close();
@@ -111,6 +136,11 @@ export class ShellService {
   validateViewFilePath(owner:string,viewId:string,sessionId:string,path:string){
     this.viewSession(owner,viewId,sessionId);
     assert(path.length>0&&path.length<=4096&&!/[\x00-\x1f\x7f]/.test(path),'INVALID_PATH','Remote path contains invalid characters');
+  }
+  viewFileContext(owner:string,viewId:string,sessionId:string,path:string){
+    this.validateViewFilePath(owner,viewId,sessionId,path);
+    const s=this.session(owner,sessionId);
+    return {targetId:s.targetId,workspaceId:s.workspaceId,root:s.root};
   }
   async open(owner: string, targetId: string, workspaceId: string, key: string, scope='open', generation=1, previousSessionId?:string) {
     assert(!this.stopping,'SERVER_STOPPING','Server is stopping');

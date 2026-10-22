@@ -217,6 +217,78 @@ test('chunked browser uploads resume host staging, reject offsets and verify eac
   }finally{await runtime.stop();await f.close();delete process.env.SHELL_MCP_TEST_TOKEN;}
 });
 
+test('durable browser uploads survive MCP restart, rebind only within the same workspace and never replay uncertain publish',{timeout:60000},async()=>{
+  const f=await fixture();process.env.SHELL_MCP_TEST_TOKEN=token;
+  const second=join(f.dir,'other-workspace');mkdirSync(second);f.config.targets.other={...f.config.targets.test,workspaces:{project:second}};
+  let runtime=await startServer(f.config);
+  try{
+    const base=()=>`http://127.0.0.1:${(runtime.server.address() as {port:number}).port}`;
+    f.config.publicUrl=base()+'/mcp';
+    const headers={Authorization:'Bearer '+token};
+    const bytes=Buffer.alloc(2*1048576+37);for(let i=0;i<bytes.length;i++)bytes[i]=(i*17+91)%256;
+    const chunks:string[]=[];for(let offset=0;offset<bytes.length;offset+=1048576)chunks.push(createHash('sha256').update(bytes.subarray(offset,Math.min(bytes.length,offset+1048576))).digest('hex'));
+    const firstSession=await runtime.service.open('owner','test','project','durable-first');
+    const firstView=runtime.service.createSessionView('owner',[firstSession.id],'durable first','durable-view-first');
+    const url=(viewId:string,sessionId:string,path:string,requestId?:string,complete=false)=>{
+      const query=new URLSearchParams({path});if(requestId)query.set('requestId',requestId);
+      return base()+'/viewer-api/views/'+viewId+'/sessions/'+sessionId+'/uploads'+(complete?'/complete':'')+'?'+query;
+    };
+    const create=(viewId:string,sessionId:string,requestId:string,path:string)=>fetch(url(viewId,sessionId,path),{
+      method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({path,requestId,size:bytes.length,chunks})
+    });
+    const patch=(viewId:string,sessionId:string,requestId:string,path:string,offset:number,chunk:Buffer)=>fetch(url(viewId,sessionId,path,requestId),{
+      method:'PATCH',headers:{...headers,'Content-Type':'application/offset+octet-stream','Upload-Offset':String(offset)},body:chunk
+    });
+    assert.equal((await create(firstView.viewId,firstSession.id,'survive-restart','durable.bin')).status,201);
+    assert.equal((await patch(firstView.viewId,firstSession.id,'survive-restart','durable.bin',0,bytes.subarray(0,1048576))).status,204);
+    const saved=runtime.service.store.list('browser-upload','owner').find(row=>row.requestId==='survive-restart')!;
+    assert.equal(saved.offset,1048576);
+    await runtime.stop();
+
+    runtime=await startServer(f.config);f.config.publicUrl=base()+'/mcp';
+    const service=runtime.service;
+    const wrong=await service.open('owner','other','project','durable-wrong-target');
+    const wrongView=service.createSessionView('owner',[wrong.id],'wrong target','durable-view-wrong');
+    const wrongBinding=await create(wrongView.viewId,wrong.id,'survive-restart','durable.bin');
+    assert.equal(wrongBinding.status,409);assert.equal((await wrongBinding.json()).error.code,'REQUEST_CONFLICT');
+    const secondSession=await service.open('owner','test','project','durable-second');
+    const secondView=service.createSessionView('owner',[secondSession.id],'durable second','durable-view-second');
+    const resumed=await create(secondView.viewId,secondSession.id,'survive-restart','durable.bin');
+    assert.equal(resumed.status,200);assert.equal((await resumed.json()).offset,1048576);
+    assert.equal((await patch(secondView.viewId,secondSession.id,'survive-restart','durable.bin',1048576,bytes.subarray(1048576,2*1048576))).status,204);
+    assert.equal((await patch(secondView.viewId,secondSession.id,'survive-restart','durable.bin',2*1048576,bytes.subarray(2*1048576))).status,204);
+    const completed=await fetch(url(secondView.viewId,secondSession.id,'durable.bin','survive-restart',true),{method:'POST',headers});
+    assert.equal(completed.status,200,JSON.stringify(await completed.clone().json()));
+    const result=(await completed.json()).result;assert.equal(result.bytes,bytes.length);
+    assert.deepEqual(readFileSync(join(f.root,'durable.bin')),bytes);
+    await runtime.stop();
+
+    runtime=await startServer(f.config);f.config.publicUrl=base()+'/mcp';
+    const finalSession=await runtime.service.open('owner','test','project','durable-third');
+    const finalView=runtime.service.createSessionView('owner',[finalSession.id],'durable third','durable-view-third');
+    const receipt=await create(finalView.viewId,finalSession.id,'survive-restart','durable.bin');
+    assert.equal(receipt.status,200);assert.equal((await receipt.json()).complete,true,'completed receipt survives restart and rebinding');
+
+    const uncertainBytes=Buffer.from('safe unknown');
+    const uncertainChunks=[createHash('sha256').update(uncertainBytes).digest('hex')];
+    const uncertainUrl=url(finalView.viewId,finalSession.id,'uncertain.bin');
+    const uncertain=await fetch(uncertainUrl,{method:'POST',headers:{...headers,'Content-Type':'application/json'},
+      body:JSON.stringify({path:'uncertain.bin',requestId:'uncertain-publish',size:uncertainBytes.length,chunks:uncertainChunks})});
+    assert.equal(uncertain.status,201);
+    const row=runtime.service.store.list('browser-upload','owner').find(item=>item.requestId==='uncertain-publish')!;
+    runtime.service.store.put('browser-upload',{...row,state:'publishing'});
+    await runtime.stop();
+
+    runtime=await startServer(f.config);f.config.publicUrl=base()+'/mcp';
+    const afterUnknown=await runtime.service.open('owner','test','project','durable-fourth');
+    const afterUnknownView=runtime.service.createSessionView('owner',[afterUnknown.id],'unknown publish','durable-view-unknown');
+    const unknown=await fetch(url(afterUnknownView.viewId,afterUnknown.id,'uncertain.bin'),{method:'POST',headers:{...headers,'Content-Type':'application/json'},
+      body:JSON.stringify({path:'uncertain.bin',requestId:'uncertain-publish',size:uncertainBytes.length,chunks:uncertainChunks})});
+    assert.equal(unknown.status,409);assert.equal((await unknown.json()).error.code,'TRANSFER_UNKNOWN');
+    assert.equal(readdirSync(f.root).includes('uncertain.bin'),false,'uncertain SSH publish is not replayed automatically');
+  }finally{await runtime.stop();await f.close();delete process.env.SHELL_MCP_TEST_TOKEN;}
+});
+
 test('saved browser views are idempotent, owner scoped, bounded and survive restart',{timeout:15000},async()=>{
   const f=await fixture();process.env.SHELL_MCP_TEST_TOKEN=token;let runtime=await startServer(f.config);
   try{
@@ -245,10 +317,10 @@ test('viewer static assets have strict policies and never embed credentials',{ti
     }
     const html=await (await fetch(base+'/sessions')).text(),js=await (await fetch(base+'/session-assets/app.js')).text();
     assert(html.includes('type="file"'));assert(html.includes('원격 파일 전송'));assert(js.includes('XMLHttpRequest'));
-    assert(!js.includes('localStorage'));assert(js.includes('sessionStorage.getItem'));assert(js.includes('sessionStorage.setItem'));
+    assert(js.includes('localStorage.getItem'));assert(js.includes('localStorage.setItem(key,id)'));assert(js.includes('localStorage.removeItem'));
+    assert(!js.includes('sessionStorage'));assert(!js.includes("localStorage.setItem('token'"));assert(!js.includes('localStorage.setItem("token"'));
     assert(js.includes("xhr.open('PATCH'"));assert(js.includes("'/uploads'"));
     assert(js.includes("method:'DELETE'"));assert(html.includes('id="cancel-upload"'));
-    assert(!js.includes("sessionStorage.setItem('token'"));assert(!js.includes('sessionStorage.setItem("token"'));
     assert.equal((await fetch(base+'/session-assets/no-such-file')).status,404);
   }finally{await runtime.stop();await f.close();delete process.env.SHELL_MCP_TEST_TOKEN;}
 });

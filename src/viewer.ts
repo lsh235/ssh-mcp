@@ -1,7 +1,7 @@
 import express, { type Request, type Response } from 'express';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
-import { constants as fsConstants, createWriteStream, rmSync, writeFileSync } from 'node:fs';
+import { constants as fsConstants, createWriteStream, rmSync } from 'node:fs';
 import { open as openFile } from 'node:fs/promises';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -10,14 +10,16 @@ import { z } from 'zod';
 import type { Authenticator } from './auth.js';
 import type { ShellService } from './service.js';
 import { Fault, hash } from './core.js';
+import type { RecordValue } from './storage.js';
 
 const outputQuery=z.object({stream:z.enum(['stdout','stderr']),cursor:z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0)});
 const transferQuery=z.object({path:z.string().min(1).max(4096),requestId:z.string().min(1).max(128).optional()});
 const uploadCreateBody=z.object({path:z.string().min(1).max(4096),requestId:z.string().min(1).max(128),
   size:z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),chunks:z.array(z.string().regex(/^[a-f0-9]{64}$/)).max(256)}).strict();
 const uploadChunkBytes=1048576;
-interface BrowserUpload {key:string;owner:string;viewId:string;sessionId:string;path:string;requestId:string;size:number;chunks:string[];
-  fingerprint:string;temporary:string;offset:number;touched:number;busy:boolean;state:'uploading'|'completed';result?:unknown;}
+interface BrowserUpload extends RecordValue {key:string;owner:string;viewId:string;sessionId:string;targetId:string;workspaceId:string;root:string;
+  path:string;requestId:string;size:number;chunks:string[];fingerprint:string;temporaryName:string;offset:number;touched:number;
+  busy:boolean;state:'uploading'|'publishing'|'unknown'|'completed';result?:unknown;reason?:string;}
 function statusFor(error:unknown){
   const code=error instanceof Fault?error.code:error instanceof z.ZodError?'INVALID_ARGUMENT':'INTERNAL_ERROR';
   const status=code==='UNAUTHENTICATED'?401:code==='INSUFFICIENT_SCOPE'||code==='FORBIDDEN'?403:
@@ -39,33 +41,67 @@ export function sessionViewer(auth:Authenticator,service:ShellService){
   const browserUploads=new Map<string,BrowserUpload>();
   const maxActiveUploads=Math.max(1,Math.min(4,service.config.limits.maxSessions));
   const maxStagedUploadBytes=service.config.limits.maxTransferBytes*2;
-  const uploadKey=(owner:string,viewId:string,sessionId:string,requestId:string)=>JSON.stringify([owner,viewId,sessionId,requestId]);
+  const uploadRetentionMs=Math.max(service.config.limits.transferTimeoutMs,24*60*60*1000);
+  const transferDirectory=join(service.config.stateDir,'transfers');
+  const uploadScope='browser-upload';
+  const uploadKey=(owner:string,requestId:string)=>JSON.stringify([owner,requestId]);
+  const uploadPath=(upload:BrowserUpload)=>join(transferDirectory,upload.temporaryName);
+  const restoreUpload=(row:RecordValue)=>{
+    const upload={...row,key:uploadKey(row.owner,String(row.requestId)),busy:false} as BrowserUpload;
+    browserUploads.set(upload.key,upload);
+    if(upload.state==='uploading')reservedUploadBytes+=upload.size;
+    return upload;
+  };
+  for(const row of service.store.list('browser-upload'))restoreUpload(row);
+  const saveBrowserUpload=(upload:BrowserUpload)=>{
+    const {key:_key,busy:_busy,...record}=upload;
+    service.store.put('browser-upload',record);
+  };
   const discardBrowserUpload=(upload:BrowserUpload)=>{
     browserUploads.delete(upload.key);
-    if(upload.temporary)rmSync(upload.temporary,{force:true});
+    service.store.removeWithRequest('browser-upload',upload.id,upload.owner,uploadScope,upload.requestId);
+    if(upload.temporaryName)rmSync(uploadPath(upload),{force:true});
     if(upload.state==='uploading')reservedUploadBytes=Math.max(0,reservedUploadBytes-upload.size);
   };
   const expireBrowserUploads=()=>{
-    const cutoff=Date.now()-service.config.limits.transferTimeoutMs;
+    const cutoff=Date.now()-uploadRetentionMs;
     for(const upload of browserUploads.values())if(!upload.busy&&upload.touched<cutoff)discardBrowserUpload(upload);
     const completed=[...browserUploads.values()].filter(upload=>upload.state==='completed').sort((a,b)=>a.touched-b.touched);
     while(browserUploads.size>128&&completed.length)discardBrowserUpload(completed.shift()!);
   };
+  const matchBinding=(upload:BrowserUpload,context:{targetId:string;workspaceId:string;root:string},path:string)=>{
+    if(upload.path!==path||upload.targetId!==context.targetId||upload.workspaceId!==context.workspaceId||upload.root!==context.root)
+      throw new Fault('REQUEST_CONFLICT','Upload request ID belongs to a different target, workspace or path');
+  };
+  const bindUpload=(upload:BrowserUpload,viewId:string,sessionId:string)=>{
+    upload.viewId=viewId;upload.sessionId=sessionId;upload.touched=Date.now();saveBrowserUpload(upload);
+  };
+  const findBrowserUpload=(owner:string,viewId:string,sessionId:string,path:string,requestId:string,
+    context:{targetId:string;workspaceId:string;root:string})=>{
+    const id=service.store.request(owner,uploadScope,requestId);
+    if(!id)return undefined;
+    const key=uploadKey(owner,requestId);
+    let upload=browserUploads.get(key);
+    if(!upload)upload=restoreUpload(service.store.get('browser-upload',id,owner));
+    matchBinding(upload,context,path);
+    if(upload.viewId!==viewId||upload.sessionId!==sessionId)bindUpload(upload,viewId,sessionId);
+    return upload;
+  };
   const verifyBrowserUploadPrefix=async(upload:BrowserUpload)=>{
     let handle:Awaited<ReturnType<typeof openFile>>;
-    try{handle=await openFile(upload.temporary,fsConstants.O_RDWR|(fsConstants.O_NOFOLLOW??0)|(fsConstants.O_NONBLOCK??0));}
+    try{handle=await openFile(uploadPath(upload),fsConstants.O_RDWR|(fsConstants.O_NOFOLLOW??0)|(fsConstants.O_NONBLOCK??0));}
     catch{discardBrowserUpload(upload);throw new Fault('TRANSFER_EXPIRED','Upload staging file is missing');}
     try{
       const stat=await handle.stat();
       if(!stat.isFile()){discardBrowserUpload(upload);throw new Fault('TRANSFER_EXPIRED','Upload staging file is not regular');}
       if(stat.size>upload.offset){await handle.truncate(upload.offset);await handle.sync();}
-      if(stat.size<upload.offset){await handle.truncate(0);await handle.sync();upload.offset=0;return;}
+      if(stat.size<upload.offset){await handle.truncate(0);await handle.sync();upload.offset=0;upload.touched=Date.now();saveBrowserUpload(upload);return;}
       let position=0,index=0;
       while(position<upload.offset){
         const length=Math.min(uploadChunkBytes,upload.offset-position),buffer=Buffer.allocUnsafe(length);let read=0;
         while(read<length){const result=await handle.read(buffer,read,length-read,position+read);if(result.bytesRead<=0)break;read+=result.bytesRead;}
         if(read!==length||createHash('sha256').update(buffer).digest('hex')!==upload.chunks[index]){
-          await handle.truncate(0);await handle.sync();upload.offset=0;return;
+          await handle.truncate(0);await handle.sync();upload.offset=0;upload.touched=Date.now();saveBrowserUpload(upload);return;
         }
         position+=length;index++;
       }
@@ -100,30 +136,41 @@ export function sessionViewer(auth:Authenticator,service:ShellService){
       const info=await auth.verify(req.get('authorization'));
       const owner=info.extra?.principal;if(typeof owner!=='string')throw new Fault('UNAUTHENTICATED','Authentication required');
       const body=uploadCreateBody.parse(req.body),viewId=req.params.viewId as string,sessionId=req.params.sessionId as string;
-      service.validateViewFilePath(owner,viewId,sessionId,body.path);
+      const context=service.viewFileContext(owner,viewId,sessionId,body.path);
       if(body.size>service.config.limits.maxTransferBytes)throw new Fault('FILE_TOO_LARGE','Upload exceeds the configured transfer limit');
       if(body.chunks.length!==Math.ceil(body.size/uploadChunkBytes))throw new Fault('INVALID_ARGUMENT','Chunk manifest does not match the declared file size');
       expireBrowserUploads();
-      const key=uploadKey(owner,viewId,sessionId,body.requestId),fingerprint=hash(JSON.stringify([body.path,body.size,body.chunks]));
-      const previous=browserUploads.get(key);
-      if(previous){
-        if(previous.fingerprint!==fingerprint)throw new Fault('REQUEST_CONFLICT','Upload request ID was used with different file content');
+      const fingerprint=hash(JSON.stringify([context.targetId,context.workspaceId,context.root,body.path,body.size,body.chunks]));
+      const previousId=service.store.request(owner,uploadScope,body.requestId,fingerprint);
+      if(previousId){
+        const previous=findBrowserUpload(owner,viewId,sessionId,body.path,body.requestId,context)!;
         if(previous.busy)throw new Fault('TRANSFER_IN_PROGRESS','Another request is using this upload');
+        if(previous.state==='unknown'||previous.state==='publishing')throw new Fault('TRANSFER_UNKNOWN','The SSH publish result is uncertain; inspect the target before starting another upload');
         if(previous.state==='uploading'){
           previous.busy=true;
-          try{await verifyBrowserUploadPrefix(previous);}finally{previous.busy=false;}
+          try{await verifyBrowserUploadPrefix(previous);previous.touched=Date.now();saveBrowserUpload(previous);}
+          finally{previous.busy=false;}
         }
-        previous.touched=Date.now();
         res.status(200).json({offset:previous.offset,size:previous.size,chunkBytes:uploadChunkBytes,
           complete:previous.state==='completed',...(previous.result?{result:previous.result}:{})});return;
       }
       if(uploadCapacity()>=maxActiveUploads)throw new Fault('RESOURCE_LIMIT','Too many active uploads');
       if(reservedUploadBytes+body.size>maxStagedUploadBytes)throw new Fault('RESOURCE_LIMIT','Upload staging capacity is full');
-      const temporary=join(service.config.stateDir,'transfers',randomUUID()+'.upload');
-      writeFileSync(temporary,new Uint8Array(),{flag:'wx',mode:0o600});
-      const upload:BrowserUpload={key,owner,viewId,sessionId,path:body.path,requestId:body.requestId,size:body.size,chunks:body.chunks,
-        fingerprint,temporary,offset:0,touched:Date.now(),busy:false,state:'uploading'};
-      browserUploads.set(key,upload);reservedUploadBytes+=body.size;
+      const temporaryName=randomUUID()+'.upload',temporary=join(transferDirectory,temporaryName);
+      let handle:Awaited<ReturnType<typeof openFile>>|undefined;
+      try{
+        handle=await openFile(temporary,fsConstants.O_WRONLY|fsConstants.O_CREAT|fsConstants.O_EXCL|(fsConstants.O_NOFOLLOW??0),0o600);
+        await handle.sync();await handle.close();handle=undefined;
+        const directoryHandle=await openFile(transferDirectory,fsConstants.O_RDONLY);
+        try{await directoryHandle.sync();}finally{await directoryHandle.close();}
+      }catch(error){if(handle)await handle.close().catch(()=>{});rmSync(temporary,{force:true});throw error;}
+      const upload:BrowserUpload={id:randomUUID(),key:uploadKey(owner,body.requestId),owner,viewId,sessionId,
+        targetId:context.targetId,workspaceId:context.workspaceId,root:context.root,path:body.path,requestId:body.requestId,
+        size:body.size,chunks:body.chunks,fingerprint,temporaryName,offset:0,touched:Date.now(),updatedAt:Date.now(),busy:false,state:'uploading'};
+      const {key:_key,busy:_busy,...record}=upload;
+      try{service.store.putWithRequest('browser-upload',record,uploadScope,body.requestId,fingerprint,upload.id);}
+      catch(error){rmSync(temporary,{force:true});throw error;}
+      browserUploads.set(upload.key,upload);reservedUploadBytes+=body.size;
       res.status(201).json({offset:0,size:upload.size,chunkBytes:uploadChunkBytes,complete:false});
     }catch(error){
       if(res.destroyed)return;
@@ -137,11 +184,11 @@ export function sessionViewer(auth:Authenticator,service:ShellService){
       const owner=info.extra?.principal;if(typeof owner!=='string')throw new Fault('UNAUTHENTICATED','Authentication required');
       const q=transferQuery.parse(req.query),viewId=req.params.viewId as string,sessionId=req.params.sessionId as string;
       if(!q.requestId)throw new Fault('INVALID_ARGUMENT','Upload requestId is required');
-      service.validateViewFilePath(owner,viewId,sessionId,q.path);expireBrowserUploads();
-      upload=browserUploads.get(uploadKey(owner,viewId,sessionId,q.requestId));
+      const context=service.viewFileContext(owner,viewId,sessionId,q.path);expireBrowserUploads();
+      upload=findBrowserUpload(owner,viewId,sessionId,q.path,q.requestId,context);
       if(!upload)throw new Fault('TRANSFER_EXPIRED','Upload is missing or expired');
-      if(upload.path!==q.path)throw new Fault('REQUEST_CONFLICT','Upload path differs from its creation request');
-      if(upload.state!=='uploading')throw new Fault('TRANSFER_IN_PROGRESS','Upload is already complete');
+      if(upload.state==='unknown'||upload.state==='publishing')throw new Fault('TRANSFER_UNKNOWN','The SSH publish result is uncertain; inspect the target before retrying');
+      if(upload.state!=='uploading')throw new Fault('TRANSFER_COMPLETED','Upload is already complete');
       if(upload.busy)throw new Fault('TRANSFER_IN_PROGRESS','Another chunk is being written for this upload');
       if(!/^application\/offset\+octet-stream(?:\s*;|$)/i.test(req.get('content-type')||''))throw new Fault('INVALID_ARGUMENT','Use application/offset+octet-stream');
       const rawOffset=req.get('upload-offset');
@@ -154,10 +201,10 @@ export function sessionViewer(auth:Authenticator,service:ShellService){
       const contentLength=req.get('content-length');
       if(contentLength!==undefined&&Number(contentLength)!==expectedBytes)throw new Fault('INVALID_ARGUMENT','Chunk length does not match the expected size');
       upload.busy=true;upload.touched=Date.now();
-      handle=await openFile(upload.temporary,fsConstants.O_RDWR|(fsConstants.O_NOFOLLOW??0)|(fsConstants.O_NONBLOCK??0));
+      handle=await openFile(uploadPath(upload),fsConstants.O_RDWR|(fsConstants.O_NOFOLLOW??0)|(fsConstants.O_NONBLOCK??0));
       const stat=await handle.stat();
       if(!stat.isFile())throw new Fault('INVALID_TRANSFER','Upload staging file is not regular');
-      if(stat.size<upload.offset){await handle.truncate(0);await handle.sync();upload.offset=0;throw new Fault('TRANSFER_OFFSET','Upload staging is shorter than its confirmed offset');}
+      if(stat.size<upload.offset){await handle.truncate(0);await handle.sync();upload.offset=0;upload.touched=Date.now();saveBrowserUpload(upload);throw new Fault('TRANSFER_OFFSET','Upload staging is shorter than its confirmed offset');}
       if(stat.size>upload.offset){await handle.truncate(upload.offset);await handle.sync();throw new Fault('TRANSFER_OFFSET','Upload staging has an unconfirmed tail');}
       const digest=createHash('sha256');let bytes=0;
       chunkTimer=setTimeout(()=>req.destroy(new Fault('TRANSFER_TIMEOUT','Upload chunk timed out')),service.config.limits.transferTimeoutMs);chunkTimer.unref();
@@ -174,7 +221,8 @@ export function sessionViewer(auth:Authenticator,service:ShellService){
       }
       if(bytes!==expectedBytes)throw new Fault('TRANSFER_INCOMPLETE','Chunk ended before its declared size');
       if(digest.digest('hex')!==upload.chunks[chunkIndex])throw new Fault('UPLOAD_CHECKSUM','Chunk checksum does not match the selected file');
-      await handle.sync();upload.offset+=bytes;upload.touched=Date.now();
+      await handle.sync();const previousOffset=upload.offset;upload.offset+=bytes;upload.touched=Date.now();
+      try{saveBrowserUpload(upload);}catch(error){upload.offset=previousOffset;await handle.truncate(previousOffset);await handle.sync();throw error;}
       res.set('Upload-Offset',String(upload.offset)).status(204).end();
     }catch(error){
       if(handle&&upload){await handle.truncate(upload.offset).catch(()=>{});await handle.sync().catch(()=>{});}
@@ -194,21 +242,37 @@ export function sessionViewer(auth:Authenticator,service:ShellService){
       const owner=info.extra?.principal;if(typeof owner!=='string')throw new Fault('UNAUTHENTICATED','Authentication required');
       const q=transferQuery.parse(req.query),viewId=req.params.viewId as string,sessionId=req.params.sessionId as string;
       if(!q.requestId)throw new Fault('INVALID_ARGUMENT','Upload requestId is required');
-      service.validateViewFilePath(owner,viewId,sessionId,q.path);expireBrowserUploads();
-      upload=browserUploads.get(uploadKey(owner,viewId,sessionId,q.requestId));
+      const context=service.viewFileContext(owner,viewId,sessionId,q.path);expireBrowserUploads();
+      upload=findBrowserUpload(owner,viewId,sessionId,q.path,q.requestId,context);
       if(!upload)throw new Fault('TRANSFER_EXPIRED','Upload is missing or expired');
-      if(upload.path!==q.path)throw new Fault('REQUEST_CONFLICT','Upload path differs from its creation request');
       if(upload.state==='completed'){res.json({result:upload.result});return;}
+      if(upload.state==='unknown'||upload.state==='publishing')throw new Fault('TRANSFER_UNKNOWN','The SSH publish result is uncertain; inspect the target before retrying');
       if(upload.busy)throw new Fault('TRANSFER_IN_PROGRESS','Another request is using this upload');
       upload.busy=true;upload.touched=Date.now();
       await verifyBrowserUploadPrefix(upload);
       if(upload.offset!==upload.size)throw new Fault('TRANSFER_INCOMPLETE','Upload has not reached its declared size');
-      const result=await service.uploadViewFile(owner,viewId,sessionId,upload.path,upload.temporary,upload.requestId);
-      upload.result=result;upload.state='completed';upload.touched=Date.now();
-      reservedUploadBytes=Math.max(0,reservedUploadBytes-upload.size);rmSync(upload.temporary,{force:true});upload.temporary='';
-      res.json({result});
+      upload.state='publishing';saveBrowserUpload(upload);
+      let publicationStarted=false;
+      let result:unknown;
+      try{
+        publicationStarted=true;
+        result=await service.uploadViewFile(owner,viewId,sessionId,upload.path,uploadPath(upload),upload.requestId);
+      }catch(error){
+        if(error instanceof Fault&&['SESSION_UNAVAILABLE','SESSION_BUSY','SERVER_STOPPING'].includes(error.code)){
+          upload.state='uploading';upload.reason=error.code;saveBrowserUpload(upload);
+        }else if(error instanceof Fault&&['FILE_EXISTS','INVALID_PATH','FILE_TOO_LARGE','REQUEST_CONFLICT','INVALID_ARGUMENT'].includes(error.code)){
+          discardBrowserUpload(upload);
+        }else{
+          upload.state=publicationStarted?'unknown':'uploading';upload.reason=publicationStarted?'PUBLISH_OUTCOME_UNCERTAIN':'PUBLISH_NOT_STARTED';saveBrowserUpload(upload);
+        }
+        throw error;
+      }
+      const stagedPath=uploadPath(upload);
+      upload.result=result;upload.state='completed';upload.reason=undefined;upload.touched=Date.now();upload.temporaryName='';saveBrowserUpload(upload);
+      reservedUploadBytes=Math.max(0,reservedUploadBytes-upload.size);
+      rmSync(stagedPath,{force:true});
+      res.json({result});return;
     }catch(error){
-      if(upload&&error instanceof Fault&&['FILE_EXISTS','INVALID_PATH','FILE_TOO_LARGE','REQUEST_CONFLICT','INVALID_ARGUMENT'].includes(error.code))discardBrowserUpload(upload);
       if(res.destroyed||req.aborted)return;
       const {code,status}=statusFor(error);if(status===401)res.set('WWW-Authenticate',auth.challenge());res.status(status).json({error:{code}});
     }finally{if(upload){upload.busy=false;upload.touched=Date.now();}}
@@ -219,12 +283,12 @@ export function sessionViewer(auth:Authenticator,service:ShellService){
       const owner=info.extra?.principal;if(typeof owner!=='string')throw new Fault('UNAUTHENTICATED','Authentication required');
       const q=transferQuery.parse(req.query),viewId=req.params.viewId as string,sessionId=req.params.sessionId as string;
       if(!q.requestId)throw new Fault('INVALID_ARGUMENT','Upload requestId is required');
-      service.validateViewFilePath(owner,viewId,sessionId,q.path);expireBrowserUploads();
-      const upload=browserUploads.get(uploadKey(owner,viewId,sessionId,q.requestId));
+      const context=service.viewFileContext(owner,viewId,sessionId,q.path);expireBrowserUploads();
+      const upload=findBrowserUpload(owner,viewId,sessionId,q.path,q.requestId,context);
       if(!upload){res.status(204).end();return;}
-      if(upload.path!==q.path)throw new Fault('REQUEST_CONFLICT','Upload path differs from its creation request');
       if(upload.busy)throw new Fault('TRANSFER_IN_PROGRESS','Another request is using this upload');
       if(upload.state==='completed')throw new Fault('TRANSFER_COMPLETED','Completed uploads cannot be cancelled');
+      if(upload.state!=='uploading')throw new Fault('TRANSFER_UNKNOWN','An uncertain SSH publish cannot be cancelled as a remote operation');
       discardBrowserUpload(upload);res.status(204).end();
     }catch(error){
       if(res.destroyed)return;
