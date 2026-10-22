@@ -274,6 +274,21 @@ export class ShellService {
   private async execute(owner: string, id: string, r: Runtime, text: string) {
     let c = this.command(owner,id);
     const started=performance.now();
+    const redactors={stdout:r.ssh.createOutputRedactor(),stderr:r.ssh.createOutputRedactor()};
+    const remoteOffsets={stdout:0,stderr:0};
+    const remoteSizes={stdout:0,stderr:0};
+    let outputFinished=false;
+    const appendOutput=(stream:'stdout'|'stderr',data:Buffer)=>{
+      if(!data.length)return;
+      appendFileSync(this.outputPath(id,stream),data);
+      c[`${stream}Bytes`]+=data.length;
+    };
+    const finishOutput=()=>{
+      if(outputFinished)return;
+      const tails={stdout:redactors.stdout.finish(),stderr:redactors.stderr.finish()};
+      outputFinished=true;
+      appendOutput('stdout',tails.stdout);appendOutput('stderr',tails.stderr);
+    };
     try {
       await r.ssh.submit(id,text,c.inputMode);
       c=this.command(owner,id);
@@ -283,17 +298,19 @@ export class ShellService {
       while (r.ssh.running && !r.cancelling && !this.stopping) {
         c = this.command(owner,id); if (!['running','accepted'].includes(c.state)) break;
         if (performance.now()-started>c.deadlineMs) { await this.cancel(owner,id,true); break; }
-        const p = await r.ssh.poll(id,{stdout:c.stdoutBytes,stderr:c.stderrBytes});
+        const p = await r.ssh.poll(id,remoteOffsets);
         c=this.command(owner,id);
         if (r.cancelling || !['running','accepted'].includes(c.state)) break;
         for (const stream of ['stdout','stderr'] as const) {
           const data=p.streams[stream]; if (!data) continue;
-          const b=Buffer.from(data.base64,'base64'); appendFileSync(this.outputPath(id,stream),b);
-          c[`${stream}Bytes`]+=b.length;
+          remoteSizes[stream]=data.size;
+          const b=Buffer.from(data.base64,'base64');remoteOffsets[stream]+=b.length;
+          const visible=redactors[stream].push(b);b.fill(0);appendOutput(stream,visible);visible.fill(0);
           if (data.truncated) c.truncated=true;
         }
-        const drained=['stdout','stderr'].every(stream => !p.streams[stream] || c[`${stream}Bytes` as 'stdoutBytes']>=Math.min(p.streams[stream].size,this.config.limits.maxOutputBytes));
+        const drained=(['stdout','stderr'] as const).every(stream => remoteOffsets[stream]>=Math.min(remoteSizes[stream],this.config.limits.maxOutputBytes));
         if (p.done && drained) {
+          finishOutput();
           await r.ssh.helper({op:'discard_command',commandId:id}).catch(()=>{c.remoteCleanupPending=true;});
           // Input publication can finish while the final spool is being removed.
           const current=this.command(owner,id);
@@ -313,7 +330,16 @@ export class ShellService {
         await r.ssh.close();
       }
     } finally {
-      r.busy=false; r.commandId=undefined; r.touched=performance.now();
+      try {
+        const before={stdout:c.stdoutBytes,stderr:c.stderrBytes};
+        finishOutput();
+        if(c.stdoutBytes!==before.stdout||c.stderrBytes!==before.stderr){
+          const latest=this.command(owner,id);
+          this.store.put('command',{...latest,stdoutBytes:c.stdoutBytes,stderrBytes:c.stderrBytes,truncated:latest.truncated||c.truncated});
+        }
+      } finally {
+        r.busy=false; r.commandId=undefined; r.touched=performance.now();
+      }
     }
   }
   private outputPath(id: string, stream: string) { return join(this.config.stateDir,'outputs',`${id}.${stream}`); }

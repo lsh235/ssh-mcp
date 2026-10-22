@@ -27,6 +27,8 @@ sys.stdout.write('Access phrase: ');sys.stdout.flush()
 secret=sys.stdin.readline().rstrip('\\r\\n')
 if user!=${JSON.stringify(username)} or secret!=${JSON.stringify(password)}:
  print('REJECTED',flush=True);sys.exit(92)
+os.environ['GATE_TEST_USER']=user
+os.environ['GATE_TEST_SECRET']=secret
 os.environ['PS1']='GATE_READY> '
 os.environ['HISTFILE']='/dev/null'
 os.execvp('bash',['bash','--noprofile','--norc','-i'])
@@ -47,11 +49,17 @@ test('post-SSH gate: two prompt inputs, same-channel files/git/commands, stdin a
   try{
     const session=await s.open('owner','test','project','gate-open');
     assert(!JSON.stringify(s.listTargets('owner')).includes('valueFrom'));
+    const secretOutput=await s.run('owner',session.id,`python3 -c 'import os,sys,time; s=os.environ["GATE_TEST_SECRET"]; n=len(s)//2; sys.stdout.write(s[:n]); sys.stdout.flush(); time.sleep(.45); sys.stdout.write(s[n:]); sys.stdout.flush()'; printf '%s' "$GATE_TEST_USER" >&2`,'gate-secret-output',100,10000);
+    assert.equal((await done(s,secretOutput.id)).exitCode,0);
+    assert.equal(s.readOutput('owner',secretOutput.id,'stdout').content,'*'.repeat(Buffer.byteLength(password)));
+    assert.equal(s.readOutput('owner',secretOutput.id,'stderr').content,'*'.repeat(Buffer.byteLength(username)));
+    assert.equal(s.command('owner',secretOutput.id).stdoutBytes,Buffer.byteLength(password));
     writeFileSync(join(f.root,'example.txt'),'before\n');
     const file=await s.readFile('owner',session.id,'example.txt') as {version:string};
     await s.patch('owner',session.id,'--- a/example.txt\n+++ b/example.txt\n@@ -1 +1 @@\n-before\n+after\n',{'example.txt':file.version},'patch');
     assert.equal((await s.readFile('owner',session.id,'example.txt') as {content:string}).content,'after\n');
     const view=s.createSessionView('owner',[session.id],'gate transfer','gate-view');
+    assert.equal(s.viewOutput('owner',view.viewId,secretOutput.id,'stdout',0).content,'*'.repeat(Buffer.byteLength(password)));
     const payload=Buffer.alloc(4097);for(let i=0;i<payload.length;i++)payload[i]=(i*19+3)%256;
     const localUpload=join(f.dir,'gate-upload.bin');writeFileSync(localUpload,payload);
     const uploaded=await s.uploadViewFile('owner',view.viewId,session.id,'gate-upload.bin',localUpload,'gate-upload-request');

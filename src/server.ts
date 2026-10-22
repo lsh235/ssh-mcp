@@ -27,7 +27,7 @@ export function createApp(config:Config) {
     res.set('Cache-Control','no-store');next();
   });
   app.use(sessionViewer(auth,service));
-  app.get('/health',(_req,res)=>res.json({status:'ok',version:'0.10.0'}));
+  app.get('/health',(_req,res)=>res.json({status:'ok',version:'0.11.0'}));
   for(const path of ['/.well-known/oauth-protected-resource','/.well-known/oauth-protected-resource/mcp'])app.get(path,(_req,res)=>{
     if(config.auth.mode!=='oauth'){res.sendStatus(404);return;}res.json(auth.metadata());
   });

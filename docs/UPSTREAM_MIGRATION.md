@@ -37,7 +37,8 @@
 | P5 / v0.8.2 구현 | B→C 사용자 재시도 업로드 | tus offset 원칙과 고정 검토한 ssh-mcp-toolkit의 `.part` 크기·최종 SHA-256 흐름을 참고 | 같은 살아 있는 SSH 세션 안에서 확인된 remote prefix SHA-256을 비교하고 불일치 시 처음부터 재전송. 서버·SSH 재시작을 넘는 resume은 제공하지 않음 |
 | P6 / v0.9.0 구현 | A→B 브라우저 청크 업로드 재개·취소 | tus protocol의 offset mismatch 409와 Termination DELETE 원칙, tus-js-client FAQ의 resume identity와 sent/accepted progress 구분 | 1 MiB SHA-256 청크, prefix 재검증, B의 private staging, 서버 확인 offset, 응답 유실 재시도, 미완료 staging DELETE, 기존 B→C 경로로 구현. B→C 실행 중 취소·브라우저/MCP 재시작 복구·tus 호환성은 보류 |
 | P7 / v0.10.0 구현 | 브라우저 종료·MCP 재시작 뒤 업로드 재개 | tus-js-client FAQ는 Web Storage의 upload identity로 브라우저를 닫은 뒤 재개할 수 있다고 설명함. Node `FileHandle.sync()`와 현재 SQLite WAL + `synchronous=FULL`을 결합해 host staging과 offset을 내구성 있게 기록 | `localStorage`에는 비밀 아닌 요청 ID만 저장. SQLite manifest, fsync된 staging, 24시간 idle expiry, 크기 제한을 적용. 새 MCP 세션으로 재결합할 때 소유자·대상·workspace root·경로가 모두 같아야 함. 서버 재시작 시 SSH 셸은 복원하지 않고 publish 불확실 상태는 자동 재실행하지 않음 |
-| P8 / 조사 필요 | PTY 기반 대화형 프로그램 | 현재 명령은 재현성 있는 non-PTY Bash를 기본으로 함. TUI/REPL 사용 요청이 확인되면 추가 이점이 있음 | PTY를 기존 managed shell과 분리된 세션 모드로 평가하고 terminal resize, ANSI 출력, interrupt, 게이트 입력, 세션 유실 시험을 설계 |
+| P8 / v0.11.0 구현 | postLogin 값의 명령 출력 마스킹 | `tufantunc/ssh-mcp` main `5c5b8476492cda568fca779b307ff8a2ca0bbbb7`의 [변경 기록](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/CHANGELOG.md)은 설정된 sudo 비밀번호를 명령 출력에서 제거하는 보완을 기록함. 이 서버도 B에 보관된 postLogin 값이 원격 명령 출력으로 되돌아올 수 있음 | 실제 postLogin 값만 stdout/stderr 저장 전에 바이트 단위로 마스킹. 청크를 넘는 값·끝부분의 미완전 접두부를 처리하고 byte cursor 길이는 보존. MCP·브라우저 공통 출력 저장 경로에서 격리 SSH 시험. 전역 파일 읽기·로그 전체 필터나 패턴 기반 비밀 탐지는 하지 않음 |
+| P9 / 조사 필요 | PTY 기반 대화형 프로그램 | 현재 명령은 재현성 있는 non-PTY Bash를 기본으로 함. TUI/REPL 사용 요청이 확인되면 추가 이점이 있음 | PTY를 기존 managed shell과 분리된 세션 모드로 평가하고 terminal resize, ANSI 출력, interrupt, 게이트 입력, 세션 유실 시험을 설계 |
 | 보류 | 업스트림의 직접 SSH credential/profile, 임의 HTTP 상태 화면, 명령 문자열 위험 분류 | 본 프로젝트는 설치 PC의 OpenSSH config·키·agent, 기존 소유권 보호, 인증된 읽기 전용 브라우저 뷰가 요구됨. 원본 SECURITY 문서에는 classifier bypass 관련 공개 권고가 여러 개 있음 | 요구사항이 바뀌지 않는 한 현재 모델을 대체하지 않음 |
 
 ## 2026-10-22 현재 조사 입력
@@ -57,6 +58,13 @@
 - MCP 재시작은 SSH 셸을 끊으므로 파일을 자동으로 C에 publish하지 않습니다. A→B 업로드가 대기 중이면 새 SSH session과 새 view가 같은 owner·target·workspace root·path를 확인한 뒤 명시적으로 staging에 재결합합니다. publish 도중 재시작이면 결과를 `unknown`으로 남기고 자동 재호출을 거부합니다.
 - staging은 idle 24시간 뒤 만료되며 기존 파일 한도·동시 업로드·총 staging 한도를 계속 적용합니다. 격리 OpenSSH 통합 시험은 청크 offset 저장, MCP 서버 인스턴스 교체, 새 세션 재결합, 다른 workspace 거부, 완료 영수증 복구와 uncertain publish 재실행 금지를 확인합니다. 프로세스 재기동 시험은 OS 전원 손실·디스크 고장 증거가 아니며 실제 VS Code Integrated Browser/Copilot 수용은 별도입니다.
 - 코드 복사나 새 runtime dependency는 없습니다.
+
+## 2026-10-22 v0.11.0 라운드
+
+- 이번 조사에서 [tufantunc/ssh-mcp main `5c5b8476492cda568fca779b307ff8a2ca0bbbb7`의 CHANGELOG](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/CHANGELOG.md)을 확인했습니다. 2.19.2 항목은 설정된 sudo 비밀번호가 명령 출력에 남던 문제와 출력 마스킹 수정을 기록합니다. 2.20.0 항목은 문자열 명령 분류기가 실행 전달 도구를 `safe`로 잘못 판단할 수 있었던 사례와 수정을 기록합니다.
+- Shell MCP에는 sudo 도구가 없으므로 postLogin의 B측 파일/환경변수 값을 동일한 개념으로 적용하되, 셸 worker가 수집한 stdout/stderr만 exact-byte matcher로 처리합니다. A/B viewer와 MCP가 공유하는 출력 파일에 마스킹한 뒤 저장하므로 비밀은 원래 명령 출력 API에 도달하지 않습니다.
+- 마스킹은 설정값이 바이트 단위로 그대로 출력된 경우만 다룹니다. ANSI 삽입·인코딩/문자 치환, `read_file`, 명령 인자·대상 자체 로그, 게이트 비밀이 청크를 가로질러 여러 별도 명령으로 나뉜 경우는 범위 밖입니다. 일치한 바이트 수를 보존하고 마지막 미완전 접두부도 숨겨 기존 cursor와 잘림 경계의 일부 노출을 방지합니다.
+- 출력 재생성·단위 시험과 실제 격리 postLogin/OpenSSH 시험으로 stdout/stderr, polling 경계, UTF-8 바이트 cursor, 일반 SSH의 무변경을 확인합니다. 코드 복사와 런타임 의존성은 없습니다.
 
 ## 2026-10-22 v0.7 라운드
 
@@ -93,4 +101,4 @@
 - 그래서 확인되지 않은 바이트 이어쓰기를 추가하지 않고, 새 `prepare` 시 24시간 이상 지난 private remote worker directories 중 worker PID/start-time이 죽은 것으로 확인된 것만 비재귀 삭제합니다. 활성 PID, 최근 항목, identity 누락, 중첩/특수 파일은 보존합니다. 이전 결과는 계속 `unknown`이며 실행을 replay하지 않습니다.
 - 코드는 upstream에서 복사하지 않았습니다. 실제 격리 OpenSSH 시험은 stale 삭제, 오래된 live worker 보존, 최근/identity 없는/중첩 경로 보존을 확인합니다.
 
-기능 백로그는 매 라운드 새 웹 근거와 사용자 요구로 다시 정렬합니다. 다음 후보는 P8의 제한된 PTY 세션입니다. 기존 non-PTY 실행 모델의 안정성을 건드리지 않고 분리된 세션 모드에서 resize, terminal output, interrupt, postLogin 입력과 reconnect 후 상태를 조사합니다.
+기능 백로그는 매 라운드 새 웹 근거와 사용자 요구로 다시 정렬합니다. 다음 후보는 P9의 제한된 PTY 세션입니다. 기존 non-PTY 실행 모델의 안정성을 건드리지 않고 분리된 세션 모드에서 resize, terminal output, interrupt, postLogin 입력과 reconnect 후 상태를 조사합니다.

@@ -1,5 +1,13 @@
 # 오픈소스 조사 근거
 
+## 2026-10-22 v0.11.0: postLogin 출력 마스킹
+
+이번 웹 재조사에서 `tufantunc/ssh-mcp` main `5c5b8476492cda568fca779b307ff8a2ca0bbbb7`의 [CHANGELOG](https://github.com/tufantunc/ssh-mcp/blob/5c5b8476492cda568fca779b307ff8a2ca0bbbb7/CHANGELOG.md)를 확인했습니다. 2.19.2는 설정된 sudo 비밀번호를 명령 출력에서 제거하는 수정과, NOPASSWD 상황에서 비밀번호가 wrapped command에 보일 수 있던 문제를 함께 기록합니다. 2.20.0은 `sqlite3`, `tar`, `gdb`, `make`, `ssh host cmd` 등 명령 실행 경로가 안전 명령으로 분류되던 문제를 고쳤다고 기록합니다. 반복되는 분류기 우회 보완은 문자열 분류를 이 프로젝트의 권한 경계로 채택하지 않을 이유를 다시 확인시킵니다.
+
+Shell MCP는 sudo 실행 도구를 도입하지 않습니다. 대신 B에 안전하게 구성한 postLogin 값이 명령 결과에 다시 포함될 때의 직접적인 누출 경로를 막도록 해당 값을 세션 메모리에서 exact byte pattern으로 유지하고, 셸 명령 stdout/stderr를 출력 파일에 쓰기 전에 같은 길이의 별표로 마스킹합니다. 스트림 chunk 경계와 종료 시 미완성 접두부를 다루며 길이를 보존해 기존 출력 cursor를 유지합니다. 브라우저 viewer와 MCP 읽기는 동일한 마스킹된 파일을 봅니다.
+
+이 구현은 업스트림 코드 복사가 아닙니다. 게이트 입력 정책과 출력 수집 위치에 맞춘 별도 코드이며, 비밀 패턴은 설정된 postLogin 값뿐입니다. ANSI 삽입·재인코딩된 값, 원격 파일을 의도적으로 읽는 `read_file`, 원격 대상의 로그, 명령 본문/이력은 마스킹 대상이 아닙니다. 일치로 인한 정상 텍스트 오탐도 가능합니다. classifier/approval 기능과 범용 secret scanner는 가져오지 않았습니다. 구현과 검증 범위는 [v0.11.0 검증 기록](V011_STATUS.md)에 있습니다.
+
 ## 2026-10-22 v0.10.0: 브라우저 종료·MCP 재시작 뒤 업로드 복원
 
 [tus-js-client FAQ](https://github.com/tus/tus-js-client/blob/main/docs/faq.md)와 [사용 안내](https://github.com/tus/tus-js-client/blob/main/docs/usage.md)는 파일 identity와 Web Storage의 upload reference를 이용해 브라우저를 닫은 뒤 같은 파일을 다시 골라 이어가는 방식을 설명합니다. Shell MCP는 localStorage에 Bearer token이나 파일 내용을 저장하지 않고, origin 안에서 target/workspace/path/file identity와 연결되는 UUID 요청 ID만 저장합니다.

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { Target } from './config.js';
 import { assert, Fault, quote, sleep } from './core.js';
 import { GatewayChannel, loginValues } from './gateway.js';
+import { SecretOutputRedactor } from './output-redactor.js';
 
 const helper = readFileSync(new URL('./runner/files.py', import.meta.url), 'utf8');
 const worker = readFileSync(new URL('./runner/worker.sh', import.meta.url), 'utf8');
@@ -21,6 +22,7 @@ export class SSHConnection {
   private diagnostics = '';
   private closeJob?: Promise<void>;
   private gateway?:GatewayChannel;
+  private outputSecrets:Buffer[]=[];
   remoteDir = '';
   root = '';
   onLost: (reason: string) => void = () => {};
@@ -37,24 +39,27 @@ export class SSHConnection {
       this.target.sshAlias
     ];
   }
-  private lost(reason: string) { if (this.alive) { this.alive = false; this.onLost(reason); } }
+  private clearOutputSecrets(){for(const secret of this.outputSecrets)secret.fill(0);this.outputSecrets=[];}
+  private lost(reason: string) { if (this.alive) { this.alive = false; this.clearOutputSecrets(); this.onLost(reason); } }
+  createOutputRedactor(){return new SecretOutputRedactor(this.outputSecrets);}
   async open(root: string) {
     // Fail before any connection/input if a configured secret cannot be resolved.
     const values=this.target.postLogin?loginValues(this.target.postLogin):[];
-    this.master = spawn('ssh', this.args(false));
-    this.master.on('error', () => this.lost('SSH_START_FAILED'));
-    this.master.stderr.on('data', b => { this.diagnostics = (this.diagnostics + b.toString()).slice(-4096); });
-    this.master.on('exit', () => this.lost('SSH_DISCONNECTED'));
-    const started = performance.now();
-    while (!existsSync(this.socket)) {
-      if (this.master.exitCode !== null || performance.now() - started > 12000) {
-        const code = /Host key verification|REMOTE HOST IDENTIFICATION/.test(this.diagnostics) ? 'HOST_KEY_UNTRUSTED' : /Permission denied|authentication/i.test(this.diagnostics) ? 'AUTH_REQUIRED' : 'SSH_CONNECT_FAILED';
-        await this.close(); throw new Fault(code, 'SSH connection failed; check the service account configuration on the MCP host');
-      }
-      await sleep(25);
-    }
-    this.alive = true;
+    this.outputSecrets=values.filter(value=>Buffer.byteLength(value)>0).map(value=>Buffer.from(value,'utf8'));
     try {
+      this.master = spawn('ssh', this.args(false));
+      this.master.on('error', () => this.lost('SSH_START_FAILED'));
+      this.master.stderr.on('data', b => { this.diagnostics = (this.diagnostics + b.toString()).slice(-4096); });
+      this.master.on('exit', () => this.lost('SSH_DISCONNECTED'));
+      const started = performance.now();
+      while (!existsSync(this.socket)) {
+        if (this.master.exitCode !== null || performance.now() - started > 12000) {
+          const code = /Host key verification|REMOTE HOST IDENTIFICATION/.test(this.diagnostics) ? 'HOST_KEY_UNTRUSTED' : /Permission denied|authentication/i.test(this.diagnostics) ? 'AUTH_REQUIRED' : 'SSH_CONNECT_FAILED';
+          await this.close(); throw new Fault(code, 'SSH connection failed; check the service account configuration on the MCP host');
+        }
+        await sleep(25);
+      }
+      this.alive = true;
       if(this.target.postLogin){
         this.shell=spawn('ssh',this.args(true,true));
         this.gateway=new GatewayChannel(this.shell,reason=>this.lost(reason));
@@ -79,7 +84,13 @@ export class SSHConnection {
         shell.stdout.on('data', data); shell.once('exit', exit);
       });
       shell.stdout.resume();
-    } catch (error) { await this.close(); throw error; }
+    } catch (error) {
+      this.clearOutputSecrets();
+      await this.close();
+      throw error;
+    } finally {
+      values.fill('');
+    }
   }
   async exec(command: string, input = '', maximum = 2097152, timeout = 15000): Promise<{stdout: string; stderr: string; code: number}> {
     assert(this.alive && existsSync(this.socket), 'SSH_DISCONNECTED', 'SSH connection is no longer available');
@@ -134,6 +145,7 @@ export class SSHConnection {
       this.alive = false;
     }
     this.gateway?.close();this.shell?.stdin.end(); this.shell?.kill(); this.master?.kill();
+    this.clearOutputSecrets();
     rmSync(this.localDir, { recursive:true, force:true });
   }
 }

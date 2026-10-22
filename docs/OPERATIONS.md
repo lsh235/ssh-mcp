@@ -1,6 +1,6 @@
 # 설치·연결·운영
 
-Shell MCP 0.10.0은 원격 MCP 설치 PC(B)에서 실행합니다. B의 SSH 인증정보로 작업 대상 PC(C)에 접속합니다. Tabby 앱이나 기존 Tabby MCP 플러그인을 실행할 필요는 없습니다. 입력·검색·이력·세션 도구는 [v0.2 사용법](V02_USAGE.md), 추가 로그인은 [LOGIN_SETUP](LOGIN_SETUP.md), 브라우저 상태 화면과 durable 파일 전송은 [VSCODE_BROWSER](VSCODE_BROWSER.md), 업스트림 기능 이식 흐름은 [UPSTREAM_MIGRATION](UPSTREAM_MIGRATION.md)을 참고하세요.
+Shell MCP 0.11.0은 원격 MCP 설치 PC(B)에서 실행합니다. B의 SSH 인증정보로 작업 대상 PC(C)에 접속합니다. Tabby 앱이나 기존 Tabby MCP 플러그인을 실행할 필요는 없습니다. 입력·검색·이력·세션 도구는 [v0.2 사용법](V02_USAGE.md), 추가 로그인과 명령 출력의 게이트 값 마스킹은 [LOGIN_SETUP](LOGIN_SETUP.md), 브라우저 상태 화면과 durable 파일 전송은 [VSCODE_BROWSER](VSCODE_BROWSER.md), 업스트림 기능 이식 흐름은 [UPSTREAM_MIGRATION](UPSTREAM_MIGRATION.md)을 참고하세요.
 
 ## 준비
 
